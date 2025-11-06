@@ -1,0 +1,15 @@
+{
+  "request": {
+    "urlPath": "/io.pipeline.repository.filesystem.FilesystemService/GetNode",
+    "method": "POST"
+  },
+  "response": {
+    "status": 200,
+    "body": "{\"id\": 1, \"document_id\": \"{{jsonPath request.body '$.document_id'}}\", \"drive_id\": 1, \"name\": \"test-document\", \"node_type_id\": 1, \"parent_id\": 0, \"path\": \"/test-document\", \"content_type\": \"application/x-protobuf-pipedoc\", \"size_bytes\": 2048, \"s3_key\": \"test/{{jsonPath request.body '$.document_id'}}.pb\", \"created_at\": {\"seconds\": {{now offset='0' format='epoch'}}, \"nanos\": 0}, \"updated_at\": {\"seconds\": {{now offset='0' format='epoch'}}, \"nanos\": 0}, \"metadata\": \"{}\", \"type\": \"FILE\", \"service_type\": \"PipeDocService\", \"payload_type\": \"PipeDoc\"}",
+    "headers": {
+      "grpc-status-name": "OK",
+      "Content-Type": "application/grpc+proto"
+    },
+    "transformers": ["response-template"]
+  }
+}

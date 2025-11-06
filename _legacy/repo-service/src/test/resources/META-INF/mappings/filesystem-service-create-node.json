@@ -1,0 +1,15 @@
+{
+  "request": {
+    "urlPath": "/io.pipeline.repository.filesystem.FilesystemService/CreateNode",
+    "method": "POST"
+  },
+  "response": {
+    "status": 200,
+    "body": "{\"id\": 1, \"document_id\": \"{{jsonPath request.body '$.document_id'}}\", \"drive_id\": 1, \"name\": \"{{jsonPath request.body '$.name'}}\", \"node_type_id\": 1, \"parent_id\": 0, \"path\": \"/{{jsonPath request.body '$.name'}}\", \"content_type\": \"{{jsonPath request.body '$.content_type'}}\", \"size_bytes\": 1024, \"s3_key\": \"test/{{jsonPath request.body '$.document_id'}}.pb\", \"created_at\": {\"seconds\": {{now offset='0' format='epoch'}}, \"nanos\": 0}, \"updated_at\": {\"seconds\": {{now offset='0' format='epoch'}}, \"nanos\": 0}, \"metadata\": \"{{jsonPath request.body '$.metadata'}}\", \"type\": \"FILE\", \"service_type\": \"{{jsonPath request.body '$.service_type'}}\", \"payload_type\": \"{{jsonPath request.body '$.payload_type'}}\"}",
+    "headers": {
+      "grpc-status-name": "OK",
+      "Content-Type": "application/grpc+proto"
+    },
+    "transformers": ["response-template"]
+  }
+}
