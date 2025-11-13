@@ -1,20 +1,21 @@
 plugins {
-    id 'java'
-    id 'io.quarkus' version '3.28.4'
-    id 'maven-publish'
+    alias(libs.plugins.java)
+    alias(libs.plugins.quarkus)
+    alias(libs.plugins.maven.publish)
 }
 
 dependencies {
-    // Use Quarkus BOM
-    implementation enforcedPlatform('io.quarkus.platform:quarkus-bom:3.28.4')
+    // Use published BOM from Maven Central/Local
+    implementation platform('ai.pipestream:pipeline-bom:0.1.0-SNAPSHOT')
 
     // Core Quarkus dependencies
     implementation 'io.quarkus:quarkus-arc'
     implementation 'io.quarkus:quarkus-grpc'
+    implementation 'io.grpc:grpc-services'
     implementation 'io.quarkus:quarkus-hibernate-orm-panache'
     implementation 'io.quarkus:quarkus-jdbc-mysql'
     implementation 'io.quarkus:quarkus-flyway'
-    implementation 'org.flywaydb:flyway-mysql:11.2.0'
+    implementation 'org.flywaydb:flyway-mysql'
     implementation 'io.quarkus:quarkus-smallrye-health'
     implementation 'io.quarkus:quarkus-smallrye-openapi'
     implementation 'io.quarkus:quarkus-container-image-docker'
@@ -24,20 +25,30 @@ dependencies {
 
     // Kafka and messaging
     implementation 'io.quarkus:quarkus-messaging-kafka'
+    implementation libs.apicurio.registry.protobuf.serde
 
-    // Service discovery
+    // Service discovery and registration
     implementation 'io.quarkus:quarkus-smallrye-stork'
-    implementation 'io.smallrye.stork:stork-service-discovery-consul:2.10.5'
-    implementation 'io.smallrye.reactive:smallrye-mutiny-vertx-consul-client:3.17.0'
+    implementation 'io.smallrye.stork:stork-service-discovery-consul'
+    implementation 'io.smallrye.reactive:smallrye-mutiny-vertx-consul-client'
+
+    // ai.pipestream libraries (versions from BOM)
+    implementation 'ai.pipestream:grpc-stubs'
+    implementation 'ai.pipestream:dynamic-grpc-registration-clients'
+    implementation 'ai.pipestream:dynamic-grpc'
+    implementation 'ai.pipestream:pipeline-commons'
+    implementation 'ai.pipestream:devservices'
 
     // Utilities
-    implementation 'org.apache.commons:commons-lang3:3.17.0'
+    implementation libs.commons.lang3
+    implementation libs.httpclient5
 
     // Testing
     testImplementation 'io.quarkus:quarkus-junit5'
     testImplementation 'io.quarkus:quarkus-junit5-mockito'
     testImplementation 'io.rest-assured:rest-assured'
-    testImplementation 'org.testcontainers:mysql:1.20.4'
+    testImplementation 'org.testcontainers:mysql'
+    runtimeOnly libs.quarkus.logging.manager
 }
 
 group = 'ai.pipestream'

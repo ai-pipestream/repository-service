@@ -2,9 +2,6 @@ pluginManagement {
     repositories {
         gradlePluginPortal()
     }
-    plugins {
-        id 'io.quarkus' version '3.28.4'
-    }
 }
 
 rootProject.name = 'repository-service'
@@ -12,8 +9,35 @@ rootProject.name = 'repository-service'
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
 
+    versionCatalogs {
+        libs {
+            // Import version catalog from published BOM
+            from("ai.pipestream:pipeline-bom-catalog:0.1.0-SNAPSHOT")
+        }
+    }
+
     repositories {
-        mavenLocal()
+        // Maven Local for published ai.pipestream artifacts during development
+        mavenLocal {
+            mavenContent {
+                releasesOnly()
+            }
+            content {
+                includeGroupByRegex "ai\\.pipestream(\\..*)?"
+            }
+        }
+
         mavenCentral()
+
+        // Maven Central snapshots host ai.pipestream SNAPSHOTs
+        maven {
+            url = uri('https://central.sonatype.com/repository/maven-snapshots/')
+            mavenContent {
+                snapshotsOnly()
+            }
+            content {
+                includeGroupByRegex "ai\\.pipestream(\\..*)?"
+            }
+        }
     }
 }
