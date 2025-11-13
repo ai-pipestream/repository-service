@@ -186,27 +186,44 @@ SUBSCRIBE upload:chunk:received
 ```
 
 **Worker pattern:**
-```python
-# Worker subscribes to channel
-for message in redis.subscribe('upload:chunk:received'):
-    data = json.loads(message)
-    upload_id = data['upload_id']
-    chunk_number = data['chunk_number']
+```java
+// Worker subscribes to channel using Reactive Messaging
+@ApplicationScoped
+public class ChunkWorker {
 
-    # Try to claim the chunk (GETDEL is atomic)
-    chunk_data = redis.getdel(f'upload:{upload_id}:chunks:{chunk_number}')
+    @Inject
+    RedisClient redis;
 
-    if chunk_data is None:
-        # Another worker claimed it already
-        continue
+    @Inject
+    S3Client s3Client;
 
-    # Process chunk: upload to S3, store ETag
-    etag = upload_to_s3(chunk_data, upload_id, chunk_number)
-    redis.zadd(f'upload:{upload_id}:etags', {etag: chunk_number})
-    redis.hincrby(f'upload:{upload_id}:state', 'uploaded_chunks', 1)
+    @Incoming("upload-chunk-received")
+    public CompletionStage<Void> processChunk(String message) {
+        JsonObject data = Json.createReader(new StringReader(message)).readObject();
+        String uploadId = data.getString("upload_id");
+        int chunkNumber = data.getInt("chunk_number");
 
-    # Check if upload complete
-    check_and_complete_upload(upload_id)
+        // Try to claim the chunk (GETDEL is atomic)
+        Response<byte[]> response = redis.getdel("upload:" + uploadId + ":chunks:" + chunkNumber)
+            .toCompletableFuture().get();
+        byte[] chunkData = response != null ? response.toBytes() : null;
+
+        if (chunkData == null) {
+            // Another worker claimed it already
+            return CompletableFuture.completedFuture(null);
+        }
+
+        // Process chunk: upload to S3, store ETag
+        String etag = uploadToS3(chunkData, uploadId, chunkNumber);
+        redis.zadd(List.of("upload:" + uploadId + ":etags", chunkNumber, etag));
+        redis.hincrby("upload:" + uploadId + ":state", "uploaded_chunks", 1);
+
+        // Check if upload complete
+        checkAndCompleteUpload(uploadId);
+
+        return CompletableFuture.completedFuture(null);
+    }
+}
 ```
 
 ### 2. Progress Updates
@@ -240,164 +257,253 @@ SUBSCRIBE upload:progress:abc123
 
 ### Pattern 1: Chunk Ingestion (Service)
 
-```python
-def upload_chunk(request):
-    upload_id = request.upload_id
-    chunk_number = request.chunk_number
-    data = request.data
-    is_last = request.is_last
+```java
+@ApplicationScoped
+public class UploadService {
 
-    # Store chunk data with 1-hour TTL
-    redis.setex(
-        f'upload:{upload_id}:chunks:{chunk_number}',
-        3600,
-        data
-    )
+    @Inject
+    RedisClient redis;
 
-    # Update state
-    redis.hincrby(f'upload:{upload_id}:state', 'received_chunks', 1)
-    redis.hset(f'upload:{upload_id}:state', 'updated_at', now_millis())
+    @Inject
+    @Channel("upload-chunk-notifications")
+    Emitter<String> chunkNotifier;
 
-    if is_last:
-        redis.hset(f'upload:{upload_id}:state', 'is_last_received', 'true')
-        total_chunks = chunk_number + 1
-        redis.hset(f'upload:{upload_id}:state', 'total_chunks', total_chunks)
+    public UploadChunkResponse uploadChunk(UploadChunkRequest request) {
+        String uploadId = request.getUploadId();
+        int chunkNumber = request.getChunkNumber();
+        byte[] data = request.getData().toByteArray();
+        boolean isLast = request.getIsLast();
 
-    # Notify workers
-    redis.publish('upload:chunk:received', json.dumps({
-        'upload_id': upload_id,
-        'chunk_number': chunk_number,
-        'is_last': is_last
-    }))
+        // Store chunk data with 1-hour TTL
+        String chunkKey = String.format("upload:%s:chunks:%d", uploadId, chunkNumber);
+        redis.setex(chunkKey, 3600, data);
 
-    # Return ACK immediately
-    return UploadChunkResponse(
-        node_id=request.node_id,
-        state=UploadState.UPLOADING,
-        chunk_number=chunk_number
-    )
+        // Update state
+        redis.hincrby("upload:" + uploadId + ":state", "received_chunks", 1);
+        redis.hset("upload:" + uploadId + ":state", "updated_at", String.valueOf(System.currentTimeMillis()));
+
+        if (isLast) {
+            redis.hset("upload:" + uploadId + ":state", "is_last_received", "true");
+            int totalChunks = chunkNumber + 1;
+            redis.hset("upload:" + uploadId + ":state", "total_chunks", String.valueOf(totalChunks));
+        }
+
+        // Notify workers
+        JsonObject notification = Json.createObjectBuilder()
+            .add("upload_id", uploadId)
+            .add("chunk_number", chunkNumber)
+            .add("is_last", isLast)
+            .build();
+        chunkNotifier.send(notification.toString());
+
+        // Return ACK immediately
+        return UploadChunkResponse.newBuilder()
+            .setNodeId(request.getNodeId())
+            .setState(UploadState.UPLOADING)
+            .setChunkNumber(chunkNumber)
+            .build();
+    }
+}
 ```
 
 ### Pattern 2: Chunk Processing (Worker)
 
-```python
-def process_chunk(upload_id, chunk_number):
-    # Atomically claim chunk (GETDEL removes it so other workers can't claim)
-    chunk_data = redis.getdel(f'upload:{upload_id}:chunks:{chunk_number}')
+```java
+@ApplicationScoped
+public class ChunkProcessor {
 
-    if chunk_data is None:
-        # Already processed by another worker
-        return
+    @Inject
+    RedisClient redis;
 
-    # Get upload state
-    state = redis.hgetall(f'upload:{upload_id}:state')
-    s3_upload_id = state['s3_upload_id']
-    s3_key = state['s3_key']
+    @Inject
+    S3Client s3Client;
 
-    # Upload to S3 as part (1-based part numbers)
-    part_number = chunk_number + 1
-    etag = s3_client.upload_part(
-        Bucket=bucket,
-        Key=s3_key,
-        UploadId=s3_upload_id,
-        PartNumber=part_number,
-        Body=chunk_data
-    )['ETag']
+    @Inject
+    @Channel("upload-progress")
+    Emitter<String> progressEmitter;
 
-    # Store ETag in sorted set
-    redis.zadd(f'upload:{upload_id}:etags', {etag: chunk_number})
+    @ConfigProperty(name = "s3.bucket.name")
+    String bucketName;
 
-    # Update progress
-    uploaded_chunks = redis.hincrby(f'upload:{upload_id}:state', 'uploaded_chunks', 1)
-    redis.hset(f'upload:{upload_id}:state', 'updated_at', now_millis())
+    public void processChunk(String uploadId, int chunkNumber) {
+        // Atomically claim chunk (GETDEL removes it so other workers can't claim)
+        String chunkKey = String.format("upload:%s:chunks:%d", uploadId, chunkNumber);
+        byte[] chunkData = redis.getdel(chunkKey).toCompletableFuture().join().toBytes();
 
-    # Publish progress
-    state = redis.hgetall(f'upload:{upload_id}:state')
-    redis.publish(f'upload:progress:{upload_id}', json.dumps({
-        'uploaded_chunks': int(state['uploaded_chunks']),
-        'total_chunks': int(state.get('total_chunks', 0)),
-        'status': state['status']
-    }))
+        if (chunkData == null) {
+            // Already processed by another worker
+            return;
+        }
 
-    # Check if upload complete
-    check_and_complete_upload(upload_id, state)
+        // Get upload state
+        Map<String, String> state = redis.hgetall("upload:" + uploadId + ":state")
+            .toCompletableFuture().join();
+        String s3UploadId = state.get("s3_upload_id");
+        String s3Key = state.get("s3_key");
+
+        // Upload to S3 as part (1-based part numbers)
+        int partNumber = chunkNumber + 1;
+        UploadPartResponse response = s3Client.uploadPart(
+            UploadPartRequest.builder()
+                .bucket(bucketName)
+                .key(s3Key)
+                .uploadId(s3UploadId)
+                .partNumber(partNumber)
+                .build(),
+            RequestBody.fromBytes(chunkData)
+        );
+        String etag = response.eTag();
+
+        // Store ETag in sorted set
+        redis.zadd(List.of("upload:" + uploadId + ":etags", chunkNumber, etag));
+
+        // Update progress
+        long uploadedChunks = redis.hincrby("upload:" + uploadId + ":state", "uploaded_chunks", 1)
+            .toCompletableFuture().join();
+        redis.hset("upload:" + uploadId + ":state", "updated_at",
+            String.valueOf(System.currentTimeMillis()));
+
+        // Publish progress
+        Map<String, String> updatedState = redis.hgetall("upload:" + uploadId + ":state")
+            .toCompletableFuture().join();
+        JsonObject progress = Json.createObjectBuilder()
+            .add("uploaded_chunks", Integer.parseInt(updatedState.get("uploaded_chunks")))
+            .add("total_chunks", Integer.parseInt(updatedState.getOrDefault("total_chunks", "0")))
+            .add("status", updatedState.get("status"))
+            .build();
+        progressEmitter.send(progress.toString());
+
+        // Check if upload complete
+        checkAndCompleteUpload(uploadId, updatedState);
+    }
+}
 ```
 
 ### Pattern 3: Upload Completion (Worker)
 
-```python
-def check_and_complete_upload(upload_id, state):
-    # Only proceed if we have all chunks
-    if not state.get('is_last_received'):
-        return  # Don't know total chunks yet
+```java
+@ApplicationScoped
+public class UploadCompletionService {
 
-    total_chunks = int(state['total_chunks'])
-    uploaded_chunks = int(state['uploaded_chunks'])
+    @Inject
+    RedisClient redis;
 
-    if uploaded_chunks < total_chunks:
-        return  # Still waiting for chunks
+    @Inject
+    S3Client s3Client;
 
-    # Check we have all ETags
-    etag_count = redis.zcard(f'upload:{upload_id}:etags')
-    if etag_count != total_chunks:
-        # This shouldn't happen, but check anyway
-        logger.warning(f'Upload {upload_id}: chunk count mismatch')
-        return
+    @Inject
+    EntityManager em;
 
-    # Mark as completing (prevents race conditions)
-    if not redis.hsetnx(f'upload:{upload_id}:state', 'status', 'COMPLETING'):
-        # Another worker is already completing
-        return
+    @Inject
+    @Channel("repository-events")
+    Emitter<String> kafkaEmitter;
 
-    # Get ordered ETags
-    etags_ordered = redis.zrange(f'upload:{upload_id}:etags', 0, -1)
+    @Inject
+    @Channel("upload-progress")
+    Emitter<String> progressEmitter;
 
-    # Build S3 multipart completion structure
-    parts = [
-        {'PartNumber': i + 1, 'ETag': etag}
-        for i, etag in enumerate(etags_ordered)
-    ]
+    @ConfigProperty(name = "s3.bucket.name")
+    String bucketName;
 
-    # Complete S3 multipart upload
-    result = s3_client.complete_multipart_upload(
-        Bucket=bucket,
-        Key=state['s3_key'],
-        UploadId=state['s3_upload_id'],
-        MultipartUpload={'Parts': parts}
-    )
+    @Transactional
+    public void checkAndCompleteUpload(String uploadId, Map<String, String> state) {
+        // Only proceed if we have all chunks
+        if (!"true".equals(state.get("is_last_received"))) {
+            // Don't know total chunks yet - wait for more
+            return;
+        }
 
-    final_etag = result['ETag']
+        int totalChunks = Integer.parseInt(state.get("total_chunks"));
+        int uploadedChunks = Integer.parseInt(state.get("uploaded_chunks"));
 
-    # Update state
-    redis.hset(f'upload:{upload_id}:state', 'status', 'COMPLETED')
-    redis.hset(f'upload:{upload_id}:state', 'final_etag', final_etag)
-    redis.hset(f'upload:{upload_id}:state', 'updated_at', now_millis())
+        if (uploadedChunks < totalChunks) {
+            // Still waiting for chunks to upload to S3
+            return;
+        }
 
-    # Update database
-    db.execute(
-        'UPDATE nodes SET status = ?, s3_etag = ?, size = ? WHERE node_id = ?',
-        ('ACTIVE', final_etag, state['expected_size'], state['node_id'])
-    )
+        // Check we have all ETags (one for each chunk)
+        long etagCount = redis.zcard("upload:" + uploadId + ":etags")
+            .toCompletableFuture().join();
+        if (etagCount != totalChunks) {
+            // This shouldn't happen, but check anyway for data integrity
+            logger.warn("Upload {}: chunk count mismatch - expected {} ETags but found {}",
+                uploadId, totalChunks, etagCount);
+            return;
+        }
 
-    # Publish Kafka event
-    kafka_producer.send('repository.uploads.completed', {
-        'node_id': state['node_id'],
-        's3_key': state['s3_key'],
-        'etag': final_etag,
-        'size': state['expected_size'],
-        'timestamp': now_millis()
-    })
+        // Mark as completing (prevents race conditions - only one worker should complete)
+        // HSETNX only sets if field doesn't exist (atomic operation)
+        Boolean wasSet = redis.hsetnx("upload:" + uploadId + ":state", "status", "COMPLETING")
+            .toCompletableFuture().join();
+        if (!wasSet) {
+            // Another worker is already completing this upload
+            return;
+        }
 
-    # Publish final progress
-    redis.publish(f'upload:progress:{upload_id}', json.dumps({
-        'status': 'COMPLETED',
-        'uploaded_chunks': total_chunks,
-        'total_chunks': total_chunks,
-        'percent': 100.0
-    }))
+        // Get ordered ETags from Redis sorted set (ordered by chunk number)
+        List<String> etagsOrdered = redis.zrange("upload:" + uploadId + ":etags", 0, -1)
+            .toCompletableFuture().join();
 
-    # Schedule cleanup (keep state for 1 hour for status queries)
-    schedule_cleanup(upload_id, delay=3600)
+        // Build S3 multipart completion structure
+        // S3 requires part numbers (1-based) with corresponding ETags
+        List<CompletedPart> parts = new ArrayList<>();
+        for (int i = 0; i < etagsOrdered.size(); i++) {
+            parts.add(CompletedPart.builder()
+                .partNumber(i + 1)  // S3 uses 1-based part numbers
+                .eTag(etagsOrdered.get(i))
+                .build());
+        }
+
+        // Complete S3 multipart upload - combines all parts into single object
+        CompleteMultipartUploadResponse result = s3Client.completeMultipartUpload(
+            CompleteMultipartUploadRequest.builder()
+                .bucket(bucketName)
+                .key(state.get("s3_key"))
+                .uploadId(state.get("s3_upload_id"))
+                .multipartUpload(CompletedMultipartUpload.builder().parts(parts).build())
+                .build()
+        );
+
+        String finalEtag = result.eTag();
+
+        // Update Redis state to reflect completion
+        redis.hset("upload:" + uploadId + ":state", "status", "COMPLETED");
+        redis.hset("upload:" + uploadId + ":state", "final_etag", finalEtag);
+        redis.hset("upload:" + uploadId + ":state", "updated_at",
+            String.valueOf(System.currentTimeMillis()));
+
+        // Update database - mark node as ACTIVE (ready for use)
+        em.createQuery("UPDATE Node n SET n.status = :status, n.s3Etag = :etag, " +
+                      "n.sizeBytes = :size WHERE n.documentId = :nodeId")
+            .setParameter("status", "ACTIVE")
+            .setParameter("etag", finalEtag)
+            .setParameter("size", Long.parseLong(state.get("expected_size")))
+            .setParameter("nodeId", state.get("node_id"))
+            .executeUpdate();
+
+        // Publish Kafka event for downstream consumers (indexing, analytics, etc.)
+        JsonObject event = Json.createObjectBuilder()
+            .add("node_id", state.get("node_id"))
+            .add("s3_key", state.get("s3_key"))
+            .add("etag", finalEtag)
+            .add("size", Long.parseLong(state.get("expected_size")))
+            .add("timestamp", System.currentTimeMillis())
+            .build();
+        kafkaEmitter.send(event.toString());
+
+        // Publish final progress update for clients
+        JsonObject progress = Json.createObjectBuilder()
+            .add("status", "COMPLETED")
+            .add("uploaded_chunks", totalChunks)
+            .add("total_chunks", totalChunks)
+            .add("percent", 100.0)
+            .build();
+        progressEmitter.send(progress.toString());
+
+        // Schedule cleanup (keep state for 1 hour for status queries, then remove)
+        scheduleCleanup(uploadId, Duration.ofHours(1));
+    }
+}
 ```
 
 ## Memory Management
@@ -451,19 +557,66 @@ Total: ~1GB + 1.5KB ≈ 1GB
 
 ### Cleanup Process
 
-```python
-def cleanup_upload(upload_id):
-    # Delete all chunk keys (if any remain)
-    chunk_keys = redis.keys(f'upload:{upload_id}:chunks:*')
-    if chunk_keys:
-        redis.delete(*chunk_keys)
+```java
+@ApplicationScoped
+public class UploadCleanupService {
 
-    # Delete state keys after delay (1 hour after completion)
-    redis.delete(
-        f'upload:{upload_id}:state',
-        f'upload:{upload_id}:etags',
-        f'upload:{upload_id}:metadata'
-    )
+    @Inject
+    RedisClient redis;
+
+    /**
+     * Clean up Redis keys associated with a completed or failed upload.
+     * This frees up memory and prevents key accumulation.
+     *
+     * @param uploadId The upload ID to clean up
+     */
+    public void cleanupUpload(String uploadId) {
+        // Delete all chunk keys (if any remain - should be cleaned during processing)
+        // Pattern matching to find all chunk keys for this upload
+        Set<String> chunkKeys = redis.keys("upload:" + uploadId + ":chunks:*")
+            .toCompletableFuture().join();
+
+        if (!chunkKeys.isEmpty()) {
+            // Delete in batch for efficiency
+            redis.del(chunkKeys.toArray(new String[0]));
+        }
+
+        // Delete state keys after delay (1 hour after completion)
+        // These keys are kept temporarily to allow status queries
+        redis.del(
+            "upload:" + uploadId + ":state",
+            "upload:" + uploadId + ":etags",
+            "upload:" + uploadId + ":metadata"
+        );
+    }
+
+    /**
+     * Schedule cleanup to run after a delay.
+     * Useful to keep upload state available for status queries before cleanup.
+     */
+    @Scheduled(every = "1h")
+    public void cleanupExpiredUploads() {
+        // Find all upload state keys
+        Set<String> stateKeys = redis.keys("upload:*:state")
+            .toCompletableFuture().join();
+
+        long now = System.currentTimeMillis();
+        long oneHourAgo = now - Duration.ofHours(1).toMillis();
+
+        for (String key : stateKeys) {
+            Map<String, String> state = redis.hgetall(key).toCompletableFuture().join();
+            String status = state.get("status");
+            long updatedAt = Long.parseLong(state.getOrDefault("updated_at", "0"));
+
+            // Clean up completed/failed uploads older than 1 hour
+            if (("COMPLETED".equals(status) || "FAILED".equals(status)) &&
+                updatedAt < oneHourAgo) {
+                String uploadId = key.replace("upload:", "").replace(":state", "");
+                cleanupUpload(uploadId);
+            }
+        }
+    }
+}
 ```
 
 ## Failure Scenarios
@@ -506,12 +659,39 @@ def cleanup_upload(upload_id):
 - Client sends same chunk_number twice
 
 **Prevention:**
-```python
-# Service checks if chunk already uploaded
-existing = redis.exists(f'upload:{upload_id}:chunks:{chunk_number}')
-if existing:
-    # Idempotent: return success, don't re-queue
-    return UploadChunkResponse(success=True)
+```java
+@ApplicationScoped
+public class UploadService {
+
+    @Inject
+    RedisClient redis;
+
+    /**
+     * Handle chunk upload with idempotency protection.
+     * If the same chunk is sent multiple times, we handle it gracefully.
+     */
+    public UploadChunkResponse uploadChunk(UploadChunkRequest request) {
+        String uploadId = request.getUploadId();
+        int chunkNumber = request.getChunkNumber();
+
+        // Check if chunk already exists (idempotency check)
+        String chunkKey = String.format("upload:%s:chunks:%d", uploadId, chunkNumber);
+        Boolean exists = redis.exists(chunkKey).toCompletableFuture().join();
+
+        if (exists) {
+            // Idempotent: chunk already received, return success without re-queuing
+            // This prevents duplicate processing and wasted S3 bandwidth
+            return UploadChunkResponse.newBuilder()
+                .setNodeId(request.getNodeId())
+                .setState(UploadState.UPLOADING)
+                .setChunkNumber(chunkNumber)
+                .build();
+        }
+
+        // Continue with normal chunk storage...
+        // (rest of upload logic)
+    }
+}
 ```
 
 ## Performance Tuning
@@ -548,12 +728,77 @@ Recommended: Start with 20, monitor queue depth
 
 ### Monitoring Metrics
 
-```python
-# Track in Prometheus/Grafana
-chunks_queued = redis.dbsize()  # Approximate chunks in queue
-upload_latency = histogram('upload_chunk_latency')  # Client → ACK time
-s3_upload_latency = histogram('s3_upload_latency')  # Redis → S3 time
-completion_latency = histogram('upload_completion_latency')  # First chunk → completed
+```java
+@ApplicationScoped
+public class UploadMetrics {
+
+    @Inject
+    MeterRegistry registry;
+
+    @Inject
+    RedisClient redis;
+
+    // Counter for total chunks processed
+    private final Counter chunksProcessedCounter;
+
+    // Histogram for tracking upload chunk latency (client → ACK time)
+    private final Timer uploadChunkLatency;
+
+    // Histogram for tracking S3 upload latency (Redis → S3 time)
+    private final Timer s3UploadLatency;
+
+    // Histogram for tracking overall completion latency (first chunk → completed)
+    private final Timer completionLatency;
+
+    @PostConstruct
+    public void init() {
+        // Initialize metrics
+        chunksProcessedCounter = Counter.builder("repository.chunks.processed")
+            .description("Total number of chunks processed")
+            .register(registry);
+
+        uploadChunkLatency = Timer.builder("repository.upload.chunk.latency")
+            .description("Time from chunk received to ACK sent")
+            .register(registry);
+
+        s3UploadLatency = Timer.builder("repository.s3.upload.latency")
+            .description("Time to upload chunk from Redis to S3")
+            .register(registry);
+
+        completionLatency = Timer.builder("repository.upload.completion.latency")
+            .description("Time from first chunk to upload completed")
+            .register(registry);
+    }
+
+    /**
+     * Track approximate number of chunks in Redis queue.
+     * Called periodically to monitor queue depth.
+     */
+    @Scheduled(every = "30s")
+    public void recordQueueDepth() {
+        // Count all chunk keys in Redis (approximate queue depth)
+        long chunksQueued = redis.keys("upload:*:chunks:*")
+            .toCompletableFuture().join().size();
+
+        Gauge.builder("repository.chunks.queued", () -> chunksQueued)
+            .description("Approximate number of chunks waiting in Redis")
+            .register(registry);
+    }
+
+    /**
+     * Record chunk processing metrics.
+     */
+    public void recordChunkProcessed() {
+        chunksProcessedCounter.increment();
+    }
+
+    /**
+     * Time an operation and record the latency.
+     */
+    public <T> T timeOperation(Timer timer, Supplier<T> operation) {
+        return timer.record(operation);
+    }
+}
 ```
 
 ## Next: S3 Multipart Upload

@@ -41,19 +41,52 @@ message RepositoryEvent {
 
 Event IDs are **deterministic hashes** to enable idempotent processing:
 
-```python
-def generate_event_id(document_id, operation, timestamp_ms):
-    """Generate deterministic event ID for idempotency."""
-    data = f"{document_id}:{operation}:{timestamp_ms}"
-    return hashlib.sha256(data.encode()).hexdigest()[:16]
+```java
+@ApplicationScoped
+public class EventIdGenerator {
 
-# Example
-event_id = generate_event_id(
-    "550e8400-e29b-41d4-a716-446655440000",
-    "created",
-    1700000000000
-)
-# Result: "a1b2c3d4e5f67890"
+    /**
+     * Generate deterministic event ID for idempotency.
+     * Same inputs always produce the same event ID, enabling deduplication.
+     *
+     * @param documentId The document UUID
+     * @param operation The operation type (e.g., "created", "updated")
+     * @param timestampMs The event timestamp in milliseconds
+     * @return A deterministic 16-character event ID
+     */
+    public String generateEventId(String documentId, String operation, long timestampMs) {
+        // Concatenate inputs to form a unique string
+        String data = String.format("%s:%s:%d", documentId, operation, timestampMs);
+
+        try {
+            // Hash using SHA-256
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(data.getBytes(StandardCharsets.UTF_8));
+
+            // Convert to hex and take first 16 characters
+            StringBuilder hexString = new StringBuilder();
+            for (int i = 0; i < Math.min(8, hash.length); i++) {
+                String hex = Integer.toHexString(0xff & hash[i]);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+
+            return hexString.toString();
+
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 algorithm not available", e);
+        }
+    }
+}
+
+// Example usage:
+// EventIdGenerator generator = new EventIdGenerator();
+// String eventId = generator.generateEventId(
+//     "550e8400-e29b-41d4-a716-446655440000",
+//     "created",
+//     1700000000000L
+// );
+// Result: "a1b2c3d4e5f67890"
 ```
 
 **Benefits:**
@@ -79,14 +112,15 @@ message SourceContext {
 ```
 
 **Example:**
-```python
-source = SourceContext(
-    component="repository-service",
-    operation="create",
-    request_id=str(uuid.uuid4()),
-    connector_id="filesystem-prod-01",
-    session_id="crawl-session-abc123"
-)
+```java
+// Building a SourceContext protobuf message in Java
+SourceContext source = SourceContext.newBuilder()
+    .setComponent("repository-service")
+    .setOperation("create")
+    .setRequestId(UUID.randomUUID().toString())
+    .setConnectorId("filesystem-prod-01")
+    .setSessionId("crawl-session-abc123")
+    .build();
 ```
 
 ## Event Topics
@@ -293,71 +327,165 @@ Published when document is deleted (soft delete).
 
 ### Example: OpenSearch Indexer
 
-```python
-class OpenSearchIndexer:
-    def __init__(self, repository_client):
-        self.repository_client = repository_client
-        self.kafka_consumer = KafkaConsumer('repository.documents.created')
+```java
+@ApplicationScoped
+public class OpenSearchIndexer {
 
-    def consume_events(self):
-        for message in self.kafka_consumer:
-            event = parse_event(message.value)
+    private static final Logger logger = Logger.getLogger(OpenSearchIndexer.class);
 
-            # Check if already processed (idempotency)
-            if self.is_event_processed(event.event_id):
-                logger.info(f'Skipping already processed event: {event.event_id}')
-                continue
+    @Inject
+    @GrpcClient("repository-service")
+    ManagedChannel repositoryChannel;
 
-            # Callback to repository service for full document
-            document = self.fetch_document(event.document_id)
+    @Inject
+    RedisClient redis;
 
-            if document:
-                # Index in OpenSearch
-                self.index_document(document)
+    @Inject
+    @RestClient
+    OpenSearchClient openSearchClient;
 
-                # Mark event as processed
-                self.mark_event_processed(event.event_id)
+    /**
+     * Consume Kafka events for document creation and index them in OpenSearch.
+     * Uses Quarkus reactive messaging for Kafka consumption.
+     */
+    @Incoming("repository-documents-created")
+    @Acknowledgment(Acknowledgment.Strategy.POST_PROCESSING)
+    public CompletionStage<Void> consumeDocumentCreatedEvent(Message<byte[]> message) {
+        // Parse protobuf event from Kafka message
+        RepositoryEvent event;
+        try {
+            event = RepositoryEvent.parseFrom(message.getPayload());
+        } catch (InvalidProtocolBufferException e) {
+            logger.errorf("Failed to parse event: %s", e.getMessage());
+            return CompletableFuture.completedFuture(null);
+        }
 
-    def fetch_document(self, document_id):
-        """Fetch full document via gRPC callback."""
-        try:
-            response = self.repository_client.GetNode(GetNodeRequest(
-                document_id=document_id,
-                include_payload=False  # Metadata only for indexing
-            ))
-            return response
-        except grpc.RpcError as e:
-            if e.code() == grpc.StatusCode.NOT_FOUND:
-                logger.warning(f'Document {document_id} not found (may have been deleted)')
-                return None
-            raise
+        // Check if already processed (idempotency protection)
+        // This prevents duplicate indexing if Kafka redelivers the message
+        if (isEventProcessed(event.getEventId())) {
+            logger.infof("Skipping already processed event: %s", event.getEventId());
+            return CompletableFuture.completedFuture(null);
+        }
 
-    def index_document(self, document):
-        """Index document in OpenSearch."""
-        self.opensearch_client.index(
-            index='documents',
-            id=document.document_id,
-            body={
-                'name': document.name,
-                'path': document.path,
-                'content_type': document.content_type,
-                'size': document.size_bytes,
-                'created_at': document.created_at.ToDatetime(),
-                'updated_at': document.updated_at.ToDatetime(),
-                'metadata': json.loads(document.metadata),
-                's3_key': document.s3_key,
-                'account_id': document.drive.account_id
+        // Callback to repository service for full document metadata
+        // Events are lean (just IDs), so we fetch full data via gRPC
+        GetNodeResponse document = fetchDocument(event.getDocumentId());
+
+        if (document != null) {
+            // Index document in OpenSearch
+            indexDocument(document);
+
+            // Mark event as processed (stored in Redis for deduplication)
+            markEventProcessed(event.getEventId());
+        }
+
+        return CompletableFuture.completedFuture(null);
+    }
+
+    /**
+     * Fetch full document metadata via gRPC callback to repository service.
+     * This is the "callback pattern" - events contain minimal data, consumers fetch full state.
+     */
+    private GetNodeResponse fetchDocument(String documentId) {
+        try {
+            // Create gRPC stub for repository service
+            NodeServiceGrpc.NodeServiceBlockingStub stub =
+                NodeServiceGrpc.newBlockingStub(repositoryChannel);
+
+            // Request full document metadata (without payload data for indexing)
+            GetNodeRequest request = GetNodeRequest.newBuilder()
+                .setDocumentId(documentId)
+                .setIncludePayload(false)  // Metadata only, not file content
+                .build();
+
+            return stub.getNode(request);
+
+        } catch (StatusRuntimeException e) {
+            if (e.getStatus().getCode() == Status.Code.NOT_FOUND) {
+                // Document was deleted between event and callback
+                logger.warnf("Document %s not found (may have been deleted)", documentId);
+                return null;
             }
-        )
+            // Re-throw other errors (will trigger retry via Kafka)
+            throw e;
+        }
+    }
 
-    def is_event_processed(self, event_id):
-        """Check if event already processed (stored in Redis)."""
-        return redis.sismember('processed_events', event_id)
+    /**
+     * Index document in OpenSearch.
+     * Converts protobuf document to JSON for OpenSearch indexing.
+     */
+    private void indexDocument(GetNodeResponse document) {
+        // Build OpenSearch document from protobuf response
+        Map<String, Object> doc = Map.of(
+            "name", document.getName(),
+            "path", document.getPath(),
+            "content_type", document.getContentType(),
+            "size", document.getSizeBytes(),
+            "created_at", document.getCreatedAt().getSeconds() * 1000,
+            "updated_at", document.getUpdatedAt().getSeconds() * 1000,
+            "metadata", parseMetadata(document.getMetadata()),
+            "s3_key", document.getS3Key(),
+            "account_id", document.getDrive().getAccountId()
+        );
 
-    def mark_event_processed(self, event_id):
-        """Mark event as processed with 30-day TTL."""
-        redis.sadd('processed_events', event_id)
-        redis.expire('processed_events', 86400 * 30)  # 30 days
+        // Index in OpenSearch
+        openSearchClient.index(
+            "documents",                      // index name
+            document.getDocumentId(),         // document ID
+            doc                                // document body
+        );
+
+        logger.infof("Indexed document %s in OpenSearch", document.getDocumentId());
+    }
+
+    /**
+     * Check if event has already been processed.
+     * Uses Redis set for fast lookup with 30-day retention.
+     */
+    private boolean isEventProcessed(String eventId) {
+        return redis.sismember("processed_events", eventId)
+            .toCompletableFuture().join();
+    }
+
+    /**
+     * Mark event as processed in Redis.
+     * Prevents duplicate processing if Kafka redelivers messages.
+     */
+    private void markEventProcessed(String eventId) {
+        // Add to Redis set
+        redis.sadd("processed_events", eventId);
+
+        // Set 30-day TTL (events older than 30 days can be reprocessed)
+        redis.expire("processed_events", 86400 * 30);
+    }
+
+    /**
+     * Parse JSON metadata string into Map.
+     */
+    private Map<String, Object> parseMetadata(String metadataJson) {
+        try {
+            return new ObjectMapper().readValue(metadataJson, Map.class);
+        } catch (Exception e) {
+            logger.warnf("Failed to parse metadata: %s", e.getMessage());
+            return Map.of();
+        }
+    }
+}
+```
+
+**Configuration (application.properties):**
+```properties
+# Kafka consumer for document created events
+mp.messaging.incoming.repository-documents-created.connector=smallrye-kafka
+mp.messaging.incoming.repository-documents-created.topic=repository.documents.created
+mp.messaging.incoming.repository-documents-created.value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
+mp.messaging.incoming.repository-documents-created.group.id=opensearch-indexer
+mp.messaging.incoming.repository-documents-created.auto.offset.reset=earliest
+
+# gRPC client for repository service callback
+quarkus.grpc.clients.repository-service.host=repository-service
+quarkus.grpc.clients.repository-service.port=9000
 ```
 
 ### Benefits of Callback Pattern
