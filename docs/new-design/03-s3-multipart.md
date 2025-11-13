@@ -62,251 +62,449 @@ We allow flexible chunk sizes to accommodate different network conditions:
 
 For small files or when client sends entire file in one chunk:
 
-```python
-if request.payload and len(request.payload) < MAX_SINGLE_PUT:
-    # Direct PUT (not multipart)
-    s3_client.put_object(
-        Bucket=bucket,
-        Key=s3_key,
-        Body=request.payload,
-        ContentType=mime_type
-    )
-    # Skip multipart upload entirely
-    return InitiateUploadResponse(
-        node_id=node_id,
-        state=UploadState.COMPLETED
-    )
+```java
+@ApplicationScoped
+public class UploadService {
+
+    @Inject
+    S3Client s3Client;
+
+    @ConfigProperty(name = "s3.bucket.name")
+    String bucketName;
+
+    @ConfigProperty(name = "s3.single.put.threshold", defaultValue = "104857600") // 100MB
+    long maxSinglePutSize;
+
+    /**
+     * Handle small file uploads with optimization.
+     * Files under threshold use simple PUT instead of multipart upload.
+     */
+    public InitiateUploadResponse initiateUpload(InitiateUploadRequest request) {
+        // Check if payload is present and small enough for direct upload
+        if (request.hasPayload() &&
+            request.getPayload().size() < maxSinglePutSize) {
+
+            String nodeId = UUID.randomUUID().toString();
+            String s3Key = buildS3Key(request.getConnectorId(), nodeId);
+
+            // Direct PUT to S3 (not multipart) - faster for small files
+            PutObjectResponse response = s3Client.putObject(
+                PutObjectRequest.builder()
+                    .bucket(bucketName)
+                    .key(s3Key)
+                    .contentType(request.getMimeType())
+                    .contentLength((long) request.getPayload().size())
+                    .build(),
+                RequestBody.fromBytes(request.getPayload().toByteArray())
+            );
+
+            // File is already uploaded - skip multipart process entirely
+            return InitiateUploadResponse.newBuilder()
+                .setNodeId(nodeId)
+                .setState(UploadState.COMPLETED)  // Already done!
+                .setCreatedAtEpochMs(System.currentTimeMillis())
+                .build();
+        }
+
+        // File is large - continue with multipart upload process
+        // (rest of multipart upload logic)
+    }
+}
 ```
 
-**Threshold:** 100MB (configurable)
-- Below threshold: Simple PUT
-- Above threshold: Multipart upload
+**Threshold:** 100MB (configurable via `s3.single.put.threshold`)
+- Below threshold: Simple PUT (faster, single API call)
+- Above threshold: Multipart upload (parallel, resumable)
 
 ### Multipart Upload Workflow
 
 #### Phase 1: Initiate Upload
 
-```python
-def initiate_upload(request):
-    # Generate IDs
-    node_id = generate_uuid()
-    s3_key = f"connectors/{request.connector_id}/{node_id}.pb"
+```java
+@ApplicationScoped
+public class MultipartUploadService {
 
-    # Initiate S3 multipart upload
-    response = s3_client.create_multipart_upload(
-        Bucket=bucket,
-        Key=s3_key,
-        ContentType=request.mime_type,
-        Metadata={
-            'node-id': node_id,
-            'connector-id': request.connector_id,
-            'original-name': request.name
-        }
-    )
+    @Inject
+    S3Client s3Client;
 
-    s3_upload_id = response['UploadId']
+    @Inject
+    RedisClient redis;
 
-    # Store state in Redis
-    redis.hset(f'upload:{node_id}:state',
-        mapping={
-            'node_id': node_id,
-            's3_upload_id': s3_upload_id,
-            's3_key': s3_key,
-            'status': 'PENDING',
-            'expected_size': request.expected_size,
-            'created_at': now_millis()
-        }
-    )
-    redis.expire(f'upload:{node_id}:state', 86400)
+    @ConfigProperty(name = "s3.bucket.name")
+    String bucketName;
 
-    # Initialize empty sorted set for ETags
-    redis.zadd(f'upload:{node_id}:etags', {})
-    redis.expire(f'upload:{node_id}:etags', 86400)
+    /**
+     * Initiate a multipart upload for large files.
+     * This creates the upload tracking structures in both S3 and Redis.
+     */
+    @Transactional
+    public InitiateUploadResponse initiateUpload(InitiateUploadRequest request) {
+        // Generate unique node ID (document identifier)
+        String nodeId = UUID.randomUUID().toString();
 
-    return InitiateUploadResponse(
-        node_id=node_id,
-        upload_id=node_id,  # Use node_id as upload_id for simplicity
-        state=UploadState.PENDING
-    )
+        // Build S3 key following naming convention
+        String s3Key = String.format("connectors/%s/%s.pb",
+            request.getConnectorId(), nodeId);
+
+        // Initiate S3 multipart upload
+        // This creates a placeholder in S3 that we'll add parts to
+        CreateMultipartUploadResponse response = s3Client.createMultipartUpload(
+            CreateMultipartUploadRequest.builder()
+                .bucket(bucketName)
+                .key(s3Key)
+                .contentType(request.getMimeType())
+                // Store metadata with the S3 object for future reference
+                .metadata(Map.of(
+                    "node-id", nodeId,
+                    "connector-id", request.getConnectorId(),
+                    "original-name", request.getName()
+                ))
+                .build()
+        );
+
+        // S3 returns an upload ID that we'll use for all subsequent part uploads
+        String s3UploadId = response.uploadId();
+
+        // Store upload state in Redis for tracking
+        Map<String, String> stateMap = Map.of(
+            "node_id", nodeId,
+            "s3_upload_id", s3UploadId,
+            "s3_key", s3Key,
+            "status", "PENDING",
+            "expected_size", String.valueOf(request.getExpectedSize()),
+            "created_at", String.valueOf(System.currentTimeMillis())
+        );
+        redis.hset(List.of("upload:" + nodeId + ":state", stateMap));
+        redis.expire("upload:" + nodeId + ":state", 86400); // 24 hour TTL
+
+        // Initialize empty sorted set for ETags
+        // This will store S3 part ETags as chunks are uploaded
+        redis.zadd(List.of("upload:" + nodeId + ":etags"));
+        redis.expire("upload:" + nodeId + ":etags", 86400);
+
+        // Return immediately with node_id and upload_id
+        // Client can now start uploading chunks in parallel
+        return InitiateUploadResponse.newBuilder()
+            .setNodeId(nodeId)
+            .setUploadId(nodeId)  // Use node_id as upload_id for simplicity
+            .setState(UploadState.PENDING)
+            .setCreatedAtEpochMs(System.currentTimeMillis())
+            .build();
+    }
+}
 ```
 
 #### Phase 2: Upload Parts
 
-```python
-def process_chunk_to_s3(upload_id, chunk_number, chunk_data):
-    # Get upload metadata
-    state = redis.hgetall(f'upload:{upload_id}:state')
-    s3_upload_id = state['s3_upload_id']
-    s3_key = state['s3_key']
+```java
+@ApplicationScoped
+public class ChunkUploadWorker {
 
-    # S3 part numbers are 1-based
-    part_number = chunk_number + 1
+    @Inject
+    S3Client s3Client;
 
-    # Upload part to S3
-    try:
-        response = s3_client.upload_part(
-            Bucket=bucket,
-            Key=s3_key,
-            UploadId=s3_upload_id,
-            PartNumber=part_number,
-            Body=chunk_data,
-            ContentLength=len(chunk_data)
-        )
+    @Inject
+    RedisClient redis;
 
-        etag = response['ETag']  # Format: "abc123..." or "abc123...-2" for multipart ETags
+    @ConfigProperty(name = "s3.bucket.name")
+    String bucketName;
 
-        # Store ETag in Redis sorted set (score = chunk_number for ordering)
-        redis.zadd(f'upload:{upload_id}:etags', {etag: chunk_number})
+    private static final Logger logger = Logger.getLogger(ChunkUploadWorker.class);
 
-        # Update progress
-        redis.hincrby(f'upload:{upload_id}:state', 'uploaded_chunks', 1)
+    /**
+     * Process a chunk from Redis and upload it to S3 as a multipart upload part.
+     * Handles retries and error scenarios gracefully.
+     */
+    public String processChunkToS3(String uploadId, int chunkNumber, byte[] chunkData) {
+        // Get upload metadata from Redis
+        Map<String, String> state = redis.hgetall("upload:" + uploadId + ":state")
+            .toCompletableFuture().join();
+        String s3UploadId = state.get("s3_upload_id");
+        String s3Key = state.get("s3_key");
 
-        logger.info(f'Uploaded part {part_number} for {upload_id}, ETag: {etag}')
+        // S3 part numbers are 1-based (chunk numbers are 0-based)
+        int partNumber = chunkNumber + 1;
 
-        return etag
+        try {
+            // Upload part to S3
+            // Each part must be at least 5MB except the last part
+            UploadPartResponse response = s3Client.uploadPart(
+                UploadPartRequest.builder()
+                    .bucket(bucketName)
+                    .key(s3Key)
+                    .uploadId(s3UploadId)
+                    .partNumber(partNumber)
+                    .contentLength((long) chunkData.length)
+                    .build(),
+                RequestBody.fromBytes(chunkData)
+            );
 
-    except ClientError as e:
-        error_code = e.response['Error']['Code']
+            // ETag format: "abc123..." or "abc123...-N" for multipart composite ETags
+            String etag = response.eTag();
 
-        if error_code == 'NoSuchUpload':
-            # Upload was aborted or expired
-            redis.hset(f'upload:{upload_id}:state', 'status', 'FAILED')
-            redis.hset(f'upload:{upload_id}:state', 'error_message', 'S3 upload expired or aborted')
-            raise
+            // Store ETag in Redis sorted set
+            // Score = chunk_number ensures proper ordering when we complete the upload
+            redis.zadd(List.of("upload:" + uploadId + ":etags", chunkNumber, etag));
 
-        elif error_code in ['RequestTimeout', 'ServiceUnavailable']:
-            # Retry with exponential backoff
-            retry_with_backoff(upload_id, chunk_number, chunk_data)
+            // Update progress counter
+            redis.hincrby("upload:" + uploadId + ":state", "uploaded_chunks", 1);
 
-        else:
-            # Permanent error
-            redis.hset(f'upload:{upload_id}:state', 'status', 'FAILED')
-            redis.hset(f'upload:{upload_id}:state', 'error_message', str(e))
-            raise
+            logger.infof("Uploaded part %d for upload %s, ETag: %s",
+                partNumber, uploadId, etag);
+
+            return etag;
+
+        } catch (S3Exception e) {
+            String errorCode = e.awsErrorDetails().errorCode();
+
+            if ("NoSuchUpload".equals(errorCode)) {
+                // Upload was aborted or expired on S3 side
+                redis.hset("upload:" + uploadId + ":state", "status", "FAILED");
+                redis.hset("upload:" + uploadId + ":state", "error_message",
+                    "S3 upload expired or aborted");
+                throw e;
+            }
+            else if ("RequestTimeout".equals(errorCode) ||
+                     "ServiceUnavailable".equals(errorCode)) {
+                // Transient error - retry with exponential backoff
+                return retryWithBackoff(uploadId, chunkNumber, chunkData);
+            }
+            else {
+                // Permanent error - mark upload as failed
+                redis.hset("upload:" + uploadId + ":state", "status", "FAILED");
+                redis.hset("upload:" + uploadId + ":state", "error_message",
+                    e.getMessage());
+                throw e;
+            }
+        }
+    }
+}
 ```
 
 #### Phase 3: Complete Upload
 
-```python
-def complete_multipart_upload(upload_id):
-    state = redis.hgetall(f'upload:{upload_id}:state')
+```java
+@ApplicationScoped
+public class MultipartCompletionService {
 
-    # Ensure all chunks uploaded
-    total_chunks = int(state.get('total_chunks', 0))
-    uploaded_chunks = int(state.get('uploaded_chunks', 0))
+    @Inject
+    S3Client s3Client;
 
-    if uploaded_chunks < total_chunks:
-        logger.warning(f'Upload {upload_id} not complete: {uploaded_chunks}/{total_chunks}')
-        return False
+    @Inject
+    RedisClient redis;
 
-    # Get ordered ETags from Redis sorted set
-    etags_with_scores = redis.zrange(f'upload:{upload_id}:etags', 0, -1, withscores=True)
+    @Inject
+    EntityManager em;
 
-    # Build parts list for S3
-    parts = []
-    for etag, chunk_number in etags_with_scores:
-        parts.append({
-            'PartNumber': int(chunk_number) + 1,  # S3 uses 1-based part numbers
-            'ETag': etag.decode() if isinstance(etag, bytes) else etag
-        })
+    @Inject
+    EventPublisher eventPublisher;
 
-    # Verify we have sequential part numbers
-    expected_parts = list(range(1, total_chunks + 1))
-    actual_parts = sorted([p['PartNumber'] for p in parts])
+    @ConfigProperty(name = "s3.bucket.name")
+    String bucketName;
 
-    if actual_parts != expected_parts:
-        missing = set(expected_parts) - set(actual_parts)
-        logger.error(f'Upload {upload_id} missing parts: {missing}')
-        redis.hset(f'upload:{upload_id}:state', 'status', 'FAILED')
-        redis.hset(f'upload:{upload_id}:state', 'error_message', f'Missing parts: {missing}')
-        return False
+    private static final Logger logger = Logger.getLogger(MultipartCompletionService.class);
 
-    # Complete S3 multipart upload
-    try:
-        response = s3_client.complete_multipart_upload(
-            Bucket=bucket,
-            Key=state['s3_key'],
-            UploadId=state['s3_upload_id'],
-            MultipartUpload={'Parts': parts}
-        )
+    /**
+     * Complete a multipart upload by combining all parts into a single S3 object.
+     * Validates that all parts are present before completing.
+     */
+    @Transactional
+    public boolean completeMultipartUpload(String uploadId) {
+        // Retrieve upload state from Redis
+        Map<String, String> state = redis.hgetall("upload:" + uploadId + ":state")
+            .toCompletableFuture().join();
 
-        final_etag = response['ETag']
-        location = response['Location']
+        // Ensure all chunks have been uploaded
+        int totalChunks = Integer.parseInt(state.getOrDefault("total_chunks", "0"));
+        int uploadedChunks = Integer.parseInt(state.getOrDefault("uploaded_chunks", "0"));
 
-        # Update Redis state
-        redis.hset(f'upload:{upload_id}:state', 'status', 'COMPLETED')
-        redis.hset(f'upload:{upload_id}:state', 'final_etag', final_etag)
-        redis.hset(f'upload:{upload_id}:state', 'completed_at', now_millis())
+        if (uploadedChunks < totalChunks) {
+            logger.warnf("Upload %s not complete: %d/%d chunks uploaded",
+                uploadId, uploadedChunks, totalChunks);
+            return false;
+        }
 
-        # Update database
-        db.execute('''
-            UPDATE nodes
-            SET status = 'ACTIVE',
-                s3_etag = ?,
-                size = ?,
-                updated_at = NOW()
-            WHERE node_id = ?
-        ''', (final_etag, state['expected_size'], state['node_id']))
+        // Get ordered ETags from Redis sorted set
+        // ZRANGE returns members sorted by score (chunk_number in our case)
+        List<ScoredValue<String>> etagsWithScores = redis.zrangeWithScores(
+            "upload:" + uploadId + ":etags", 0, -1
+        ).toCompletableFuture().join();
 
-        # Publish Kafka completion event
-        publish_upload_completed_event(state, final_etag)
+        // Build parts list for S3 CompleteMultipartUpload request
+        List<CompletedPart> parts = new ArrayList<>();
+        for (ScoredValue<String> entry : etagsWithScores) {
+            int chunkNumber = (int) entry.score();
+            String etag = entry.value();
+            parts.add(CompletedPart.builder()
+                .partNumber(chunkNumber + 1)  // S3 uses 1-based part numbers
+                .eTag(etag)
+                .build());
+        }
 
-        logger.info(f'Completed upload {upload_id}, ETag: {final_etag}')
+        // Verify we have sequential part numbers (no gaps)
+        Set<Integer> expectedParts = IntStream.rangeClosed(1, totalChunks)
+            .boxed()
+            .collect(Collectors.toSet());
+        Set<Integer> actualParts = parts.stream()
+            .map(CompletedPart::partNumber)
+            .collect(Collectors.toSet());
 
-        return True
+        if (!actualParts.equals(expectedParts)) {
+            Set<Integer> missing = new HashSet<>(expectedParts);
+            missing.removeAll(actualParts);
+            logger.errorf("Upload %s missing parts: %s", uploadId, missing);
+            redis.hset("upload:" + uploadId + ":state", "status", "FAILED");
+            redis.hset("upload:" + uploadId + ":state", "error_message",
+                "Missing parts: " + missing);
+            return false;
+        }
 
-    except ClientError as e:
-        error_code = e.response['Error']['Code']
-        logger.error(f'Failed to complete upload {upload_id}: {error_code}')
+        // Complete S3 multipart upload - combines all parts into single object
+        try {
+            CompleteMultipartUploadResponse response = s3Client.completeMultipartUpload(
+                CompleteMultipartUploadRequest.builder()
+                    .bucket(bucketName)
+                    .key(state.get("s3_key"))
+                    .uploadId(state.get("s3_upload_id"))
+                    .multipartUpload(CompletedMultipartUpload.builder()
+                        .parts(parts)
+                        .build())
+                    .build()
+            );
 
-        redis.hset(f'upload:{upload_id}:state', 'status', 'FAILED')
-        redis.hset(f'upload:{upload_id}:state', 'error_message', str(e))
+            String finalEtag = response.eTag();
+            String location = response.location();
 
-        return False
+            // Update Redis state to reflect completion
+            redis.hset("upload:" + uploadId + ":state", "status", "COMPLETED");
+            redis.hset("upload:" + uploadId + ":state", "final_etag", finalEtag);
+            redis.hset("upload:" + uploadId + ":state", "completed_at",
+                String.valueOf(System.currentTimeMillis()));
+
+            // Update database - mark node as ACTIVE and store final metadata
+            em.createQuery("""
+                UPDATE Node n
+                SET n.status = 'ACTIVE',
+                    n.s3Etag = :etag,
+                    n.sizeBytes = :size,
+                    n.updatedAt = CURRENT_TIMESTAMP
+                WHERE n.documentId = :nodeId
+                """)
+                .setParameter("etag", finalEtag)
+                .setParameter("size", Long.parseLong(state.get("expected_size")))
+                .setParameter("nodeId", state.get("node_id"))
+                .executeUpdate();
+
+            // Publish Kafka completion event for downstream consumers
+            eventPublisher.publishUploadCompleted(state, finalEtag);
+
+            logger.infof("Completed upload %s, ETag: %s", uploadId, finalEtag);
+
+            return true;
+
+        } catch (S3Exception e) {
+            String errorCode = e.awsErrorDetails().errorCode();
+            logger.errorf("Failed to complete upload %s: %s", uploadId, errorCode);
+
+            redis.hset("upload:" + uploadId + ":state", "status", "FAILED");
+            redis.hset("upload:" + uploadId + ":state", "error_message", e.getMessage());
+
+            return false;
+        }
+    }
+}
 ```
 
 ## Upload Cancellation
 
 ### Client-Initiated Cancellation
 
-```python
-def cancel_upload(node_id):
-    state = redis.hgetall(f'upload:{node_id}:state')
+```java
+@ApplicationScoped
+public class UploadCancellationService {
 
-    if not state:
-        return {'success': False, 'message': 'Upload not found'}
+    @Inject
+    S3Client s3Client;
 
-    if state['status'] == 'COMPLETED':
-        return {'success': False, 'message': 'Upload already completed'}
+    @Inject
+    RedisClient redis;
 
-    s3_upload_id = state.get('s3_upload_id')
-    s3_key = state.get('s3_key')
+    @Inject
+    EntityManager em;
 
-    if s3_upload_id:
-        # Abort S3 multipart upload
-        try:
-            s3_client.abort_multipart_upload(
-                Bucket=bucket,
-                Key=s3_key,
-                UploadId=s3_upload_id
-            )
-        except ClientError as e:
-            logger.warning(f'Failed to abort S3 upload: {e}')
+    @ConfigProperty(name = "s3.bucket.name")
+    String bucketName;
 
-    # Clean up Redis
-    redis.delete(f'upload:{node_id}:state')
-    redis.delete(f'upload:{node_id}:etags')
-    redis.delete(f'upload:{node_id}:metadata')
+    private static final Logger logger = Logger.getLogger(UploadCancellationService.class);
 
-    # Delete chunk data
-    chunk_keys = redis.keys(f'upload:{node_id}:chunks:*')
-    if chunk_keys:
-        redis.delete(*chunk_keys)
+    /**
+     * Cancel an in-progress upload.
+     * Aborts the S3 multipart upload and cleans up all related state.
+     */
+    @Transactional
+    public Map<String, Object> cancelUpload(String nodeId) {
+        // Get upload state from Redis
+        Map<String, String> state = redis.hgetall("upload:" + nodeId + ":state")
+            .toCompletableFuture().join();
 
-    # Update database
-    db.execute('UPDATE nodes SET status = ? WHERE node_id = ?', ('CANCELLED', node_id))
+        if (state.isEmpty()) {
+            return Map.of(
+                "success", false,
+                "message", "Upload not found"
+            );
+        }
 
-    return {'success': True, 'message': 'Upload cancelled'}
+        if ("COMPLETED".equals(state.get("status"))) {
+            return Map.of(
+                "success", false,
+                "message", "Upload already completed"
+            );
+        }
+
+        String s3UploadId = state.get("s3_upload_id");
+        String s3Key = state.get("s3_key");
+
+        // Abort S3 multipart upload to free up S3 resources
+        // S3 charges for incomplete multipart uploads, so this is important
+        if (s3UploadId != null) {
+            try {
+                s3Client.abortMultipartUpload(
+                    AbortMultipartUploadRequest.builder()
+                        .bucket(bucketName)
+                        .key(s3Key)
+                        .uploadId(s3UploadId)
+                        .build()
+                );
+            } catch (S3Exception e) {
+                logger.warnf("Failed to abort S3 upload %s: %s",
+                    s3UploadId, e.getMessage());
+                // Continue with cleanup even if S3 abort fails
+            }
+        }
+
+        // Clean up Redis state
+        redis.del("upload:" + nodeId + ":state");
+        redis.del("upload:" + nodeId + ":etags");
+        redis.del("upload:" + nodeId + ":metadata");
+
+        // Delete all chunk data from Redis
+        Set<String> chunkKeys = redis.keys("upload:" + nodeId + ":chunks:*")
+            .toCompletableFuture().join();
+        if (!chunkKeys.isEmpty()) {
+            redis.del(chunkKeys.toArray(new String[0]));
+        }
+
+        // Update database - mark node as cancelled
+        em.createQuery("UPDATE Node n SET n.status = 'CANCELLED' WHERE n.documentId = :nodeId")
+            .setParameter("nodeId", nodeId)
+            .executeUpdate();
+
+        return Map.of(
+            "success", true,
+            "message", "Upload cancelled"
+        );
+    }
+}
 ```
 
 ### Automatic Cleanup of Abandoned Uploads
@@ -353,23 +551,77 @@ def cleanup_abandoned_uploads():
 
 ### Retry Logic
 
-```python
-def retry_with_backoff(upload_id, chunk_number, chunk_data, attempt=1, max_attempts=3):
-    if attempt > max_attempts:
-        logger.error(f'Max retries exceeded for upload {upload_id} chunk {chunk_number}')
-        redis.hset(f'upload:{upload_id}:state', 'status', 'FAILED')
-        redis.hset(f'upload:{upload_id}:state', 'error_message', 'S3 upload failed after retries')
-        return None
+```java
+@ApplicationScoped
+public class RetryService {
 
-    delay = min(2 ** attempt, 60)  # Exponential backoff, max 60 seconds
-    logger.info(f'Retrying upload {upload_id} chunk {chunk_number} in {delay}s (attempt {attempt})')
-    time.sleep(delay)
+    @Inject
+    ChunkUploadWorker uploadWorker;
 
-    try:
-        return process_chunk_to_s3(upload_id, chunk_number, chunk_data)
-    except Exception as e:
-        logger.warning(f'Retry attempt {attempt} failed: {e}')
-        return retry_with_backoff(upload_id, chunk_number, chunk_data, attempt + 1, max_attempts)
+    @Inject
+    RedisClient redis;
+
+    private static final Logger logger = Logger.getLogger(RetryService.class);
+    private static final int MAX_ATTEMPTS = 3;
+
+    /**
+     * Retry chunk upload with exponential backoff.
+     * Handles transient S3 failures gracefully.
+     *
+     * @param uploadId The upload ID
+     * @param chunkNumber The chunk number to retry
+     * @param chunkData The chunk data bytes
+     * @param attempt Current attempt number (1-based)
+     * @return The ETag if successful, null if all retries exhausted
+     */
+    public String retryWithBackoff(String uploadId, int chunkNumber,
+                                   byte[] chunkData, int attempt) {
+        if (attempt > MAX_ATTEMPTS) {
+            logger.errorf("Max retries (%d) exceeded for upload %s chunk %d",
+                MAX_ATTEMPTS, uploadId, chunkNumber);
+
+            // Mark upload as failed after exhausting retries
+            redis.hset("upload:" + uploadId + ":state", "status", "FAILED");
+            redis.hset("upload:" + uploadId + ":state", "error_message",
+                "S3 upload failed after " + MAX_ATTEMPTS + " retries");
+            return null;
+        }
+
+        // Exponential backoff: 2^attempt seconds, max 60 seconds
+        // Attempt 1: 2s, Attempt 2: 4s, Attempt 3: 8s
+        long delaySeconds = Math.min((long) Math.pow(2, attempt), 60);
+
+        logger.infof("Retrying upload %s chunk %d in %ds (attempt %d/%d)",
+            uploadId, chunkNumber, delaySeconds, attempt, MAX_ATTEMPTS);
+
+        try {
+            // Wait before retrying
+            Thread.sleep(delaySeconds * 1000);
+
+            // Retry the upload
+            return uploadWorker.processChunkToS3(uploadId, chunkNumber, chunkData);
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.errorf("Retry interrupted for upload %s chunk %d", uploadId, chunkNumber);
+            return null;
+
+        } catch (Exception e) {
+            logger.warnf("Retry attempt %d failed for upload %s chunk %d: %s",
+                attempt, uploadId, chunkNumber, e.getMessage());
+
+            // Recursive retry with incremented attempt counter
+            return retryWithBackoff(uploadId, chunkNumber, chunkData, attempt + 1);
+        }
+    }
+
+    /**
+     * Convenience method to start retry from attempt 1.
+     */
+    public String retryWithBackoff(String uploadId, int chunkNumber, byte[] chunkData) {
+        return retryWithBackoff(uploadId, chunkNumber, chunkData, 1);
+    }
+}
 ```
 
 ### Part Number Conflicts
