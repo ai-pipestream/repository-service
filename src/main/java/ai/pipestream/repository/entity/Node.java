@@ -6,7 +6,7 @@ import java.time.Instant;
 
 /**
  * Entity representing a node (document) in the repository.
- * Nodes are stored in drives and tracked through the upload lifecycle.
+ * Nodes track the upload lifecycle and reference the final Document entity.
  * 
  * Design reference: docs/new-design/00-overview.md
  */
@@ -20,6 +20,10 @@ public class Node extends PanacheEntity {
     @ManyToOne
     @JoinColumn(name = "drive_id")
     public Drive drive;
+
+    @ManyToOne
+    @JoinColumn(name = "document_id")
+    public Document document;  // Link to Document once upload completes
 
     @Column(nullable = false)
     public String name;
