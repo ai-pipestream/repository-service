@@ -1,0 +1,131 @@
+plugins {
+    alias(libs.plugins.java)
+    alias(libs.plugins.quarkus)
+    alias(libs.plugins.maven.publish)
+}
+
+dependencies {
+    // Use published BOM from Maven Central/Local
+    implementation platform('ai.pipestream:pipeline-bom:0.1.0-SNAPSHOT')
+
+    // Core Quarkus dependencies
+    implementation 'io.quarkus:quarkus-arc'
+    implementation 'io.quarkus:quarkus-grpc'
+    implementation 'io.grpc:grpc-services'
+    implementation 'io.quarkus:quarkus-hibernate-orm-panache'
+    implementation 'io.quarkus:quarkus-jdbc-mysql'
+    implementation 'io.quarkus:quarkus-flyway'
+    implementation 'org.flywaydb:flyway-mysql'
+    implementation 'io.quarkus:quarkus-smallrye-health'
+    implementation 'io.quarkus:quarkus-smallrye-openapi'
+    implementation 'io.quarkus:quarkus-container-image-docker'
+
+    // Redis support
+    implementation 'io.quarkus:quarkus-redis-client'
+
+    // Kafka and messaging
+    implementation 'io.quarkus:quarkus-messaging-kafka'
+    implementation libs.apicurio.registry.protobuf.serde
+
+    // Service discovery and registration
+    implementation 'io.quarkus:quarkus-smallrye-stork'
+    implementation 'io.smallrye.stork:stork-service-discovery-consul'
+    implementation 'io.smallrye.reactive:smallrye-mutiny-vertx-consul-client'
+
+    // ai.pipestream libraries (versions from BOM)
+    implementation 'ai.pipestream:grpc-stubs'
+    implementation 'ai.pipestream:dynamic-grpc-registration-clients'
+    implementation 'ai.pipestream:dynamic-grpc'
+    implementation 'ai.pipestream:pipeline-commons'
+    implementation 'ai.pipestream:devservices'
+
+    // Utilities
+    implementation libs.commons.lang3
+    implementation libs.httpclient5
+
+    // Testing
+    testImplementation 'io.quarkus:quarkus-junit5'
+    testImplementation 'io.quarkus:quarkus-junit5-mockito'
+    testImplementation 'io.rest-assured:rest-assured'
+    testImplementation 'org.testcontainers:mysql'
+    runtimeOnly libs.quarkus.logging.manager
+}
+
+group = 'ai.pipestream'
+version = '0.1.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+test {
+    systemProperty "java.util.logging.manager", "org.jboss.logmanager.LogManager"
+}
+
+compileJava {
+    options.encoding = 'UTF-8'
+    options.compilerArgs << '-parameters'
+}
+
+compileTestJava {
+    options.encoding = 'UTF-8'
+}
+
+// Publishing configuration
+publishing {
+    publications {
+        //noinspection GroovyAssignabilityCheck
+        maven(MavenPublication) { publication ->
+            from components.java
+            //noinspection GroovyAssignabilityCheck
+            artifact(file("${buildDir}/quarkus-app/quarkus-run.jar")) { artifact ->
+                artifact.classifier = 'runner'
+                artifact.builtBy tasks.named('quarkusBuild')
+            }
+            pom { pom ->
+                name.set('Repository Service')
+                description.set('Central repository management service for documents, modules, and configurations')
+                url.set('https://github.com/ai-pipestream/repository-service')
+
+                licenses {
+                    license {
+                        name.set('Apache License 2.0')
+                        url.set('https://www.apache.org/licenses/LICENSE-2.0')
+                    }
+                }
+
+                developers {
+                    developer {
+                        id.set('krickert')
+                        email.set('krickert@rokkon.com')
+                        name.set('Pipeline Engine Team')
+                    }
+                }
+
+                scm {
+                    connection.set('scm:git:git://github.com/ai-pipestream/repository-service.git')
+                    developerConnection.set('scm:git:ssh://github.com/ai-pipestream/repository-service.git')
+                    url.set('https://github.com/ai-pipestream/repository-service')
+                }
+            }
+        }
+    }
+
+    repositories {
+        // Publish to Maven Local for development
+        mavenLocal()
+
+        // Publish to GitHub Packages
+        if (System.getenv("GITHUB_ACTOR") != null) {
+            maven {
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/ai-pipestream/repository-service")
+                credentials {
+                    username = System.getenv("GITHUB_ACTOR")
+                    password = System.getenv("GITHUB_TOKEN")
+                }
+            }
+        }
+    }
+}
