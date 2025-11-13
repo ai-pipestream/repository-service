@@ -1,0 +1,19 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+    }
+    plugins {
+        id 'io.quarkus' version '3.28.4'
+    }
+}
+
+rootProject.name = 'repository-service'
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+
+    repositories {
+        mavenLocal()
+        mavenCentral()
+    }
+}

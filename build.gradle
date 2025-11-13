@@ -1,0 +1,120 @@
+plugins {
+    id 'java'
+    id 'io.quarkus' version '3.28.4'
+    id 'maven-publish'
+}
+
+dependencies {
+    // Use Quarkus BOM
+    implementation enforcedPlatform('io.quarkus.platform:quarkus-bom:3.28.4')
+
+    // Core Quarkus dependencies
+    implementation 'io.quarkus:quarkus-arc'
+    implementation 'io.quarkus:quarkus-grpc'
+    implementation 'io.quarkus:quarkus-hibernate-orm-panache'
+    implementation 'io.quarkus:quarkus-jdbc-mysql'
+    implementation 'io.quarkus:quarkus-flyway'
+    implementation 'org.flywaydb:flyway-mysql:11.2.0'
+    implementation 'io.quarkus:quarkus-smallrye-health'
+    implementation 'io.quarkus:quarkus-smallrye-openapi'
+    implementation 'io.quarkus:quarkus-container-image-docker'
+
+    // Redis support
+    implementation 'io.quarkus:quarkus-redis-client'
+
+    // Kafka and messaging
+    implementation 'io.quarkus:quarkus-messaging-kafka'
+
+    // Service discovery
+    implementation 'io.quarkus:quarkus-smallrye-stork'
+    implementation 'io.smallrye.stork:stork-service-discovery-consul:2.10.5'
+    implementation 'io.smallrye.reactive:smallrye-mutiny-vertx-consul-client:3.17.0'
+
+    // Utilities
+    implementation 'org.apache.commons:commons-lang3:3.17.0'
+
+    // Testing
+    testImplementation 'io.quarkus:quarkus-junit5'
+    testImplementation 'io.quarkus:quarkus-junit5-mockito'
+    testImplementation 'io.rest-assured:rest-assured'
+    testImplementation 'org.testcontainers:mysql:1.20.4'
+}
+
+group = 'ai.pipestream'
+version = '0.1.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+test {
+    systemProperty "java.util.logging.manager", "org.jboss.logmanager.LogManager"
+}
+
+compileJava {
+    options.encoding = 'UTF-8'
+    options.compilerArgs << '-parameters'
+}
+
+compileTestJava {
+    options.encoding = 'UTF-8'
+}
+
+// Publishing configuration
+publishing {
+    publications {
+        //noinspection GroovyAssignabilityCheck
+        maven(MavenPublication) { publication ->
+            from components.java
+            //noinspection GroovyAssignabilityCheck
+            artifact(file("${buildDir}/quarkus-app/quarkus-run.jar")) { artifact ->
+                artifact.classifier = 'runner'
+                artifact.builtBy tasks.named('quarkusBuild')
+            }
+            pom { pom ->
+                name.set('Repository Service')
+                description.set('Central repository management service for documents, modules, and configurations')
+                url.set('https://github.com/ai-pipestream/repository-service')
+
+                licenses {
+                    license {
+                        name.set('Apache License 2.0')
+                        url.set('https://www.apache.org/licenses/LICENSE-2.0')
+                    }
+                }
+
+                developers {
+                    developer {
+                        id.set('krickert')
+                        email.set('krickert@rokkon.com')
+                        name.set('Pipeline Engine Team')
+                    }
+                }
+
+                scm {
+                    connection.set('scm:git:git://github.com/ai-pipestream/repository-service.git')
+                    developerConnection.set('scm:git:ssh://github.com/ai-pipestream/repository-service.git')
+                    url.set('https://github.com/ai-pipestream/repository-service')
+                }
+            }
+        }
+    }
+
+    repositories {
+        // Publish to Maven Local for development
+        mavenLocal()
+
+        // Publish to GitHub Packages
+        if (System.getenv("GITHUB_ACTOR") != null) {
+            maven {
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/ai-pipestream/repository-service")
+                credentials {
+                    username = System.getenv("GITHUB_ACTOR")
+                    password = System.getenv("GITHUB_TOKEN")
+                }
+            }
+        }
+    }
+}
