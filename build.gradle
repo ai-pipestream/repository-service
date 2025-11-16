@@ -36,6 +36,7 @@ dependencies {
     // Service discovery and registration
     implementation 'io.quarkus:quarkus-smallrye-stork'
     implementation 'io.smallrye.stork:stork-service-discovery-consul'
+    implementation 'io.smallrye.stork:stork-service-registration-consul'
     implementation 'io.smallrye.reactive:smallrye-mutiny-vertx-consul-client'
 
     // Pipeline libraries (published to Maven Local)
@@ -68,6 +69,7 @@ dependencies {
     testImplementation 'io.quarkus:quarkus-junit5-mockito'
     testImplementation 'io.rest-assured:rest-assured'
     testImplementation 'org.testcontainers:mysql'
+    testImplementation 'io.quarkus:quarkus-jdbc-h2'
     runtimeOnly libs.quarkus.logging.manager
 }
 
