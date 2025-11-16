@@ -56,7 +56,7 @@ public class NodeUploadGrpcService extends NodeUploadServiceGrpc.NodeUploadServi
             }
 
             // Generate node_id and upload_id
-            String nodeId = request.hasClientNodeId() && !request.getClientNodeId().isEmpty()
+            String nodeId = !request.getClientNodeId().isEmpty()
                     ? request.getClientNodeId()
                     : UUID.randomUUID().toString();
             String uploadId = UUID.randomUUID().toString();
