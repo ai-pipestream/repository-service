@@ -53,6 +53,16 @@ dependencies {
     implementation libs.commons.lang3
     implementation libs.httpclient5
 
+    // Caching (Guava for in-memory cache with eviction)
+    implementation 'com.google.guava:guava:33.3.1-jre'
+
+    // Micrometer for metrics
+    implementation 'io.quarkus:quarkus-micrometer'
+    implementation 'io.quarkus:quarkus-micrometer-registry-prometheus'
+
+    // OpenTelemetry for tracing
+    implementation 'io.quarkus:quarkus-opentelemetry'
+
     // Testing
     testImplementation 'io.quarkus:quarkus-junit5'
     testImplementation 'io.quarkus:quarkus-junit5-mockito'
