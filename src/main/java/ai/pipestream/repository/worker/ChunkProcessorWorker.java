@@ -12,7 +12,7 @@ import org.jboss.logging.Logger;
  * 3. Upload to S3 as multipart
  * 4. Store ETags in Redis
  * 5. Handle encryption for SSE-C
- * 
+ * <p>
  * Design reference: docs/new-design/03-s3-multipart.md
  */
 @ApplicationScoped

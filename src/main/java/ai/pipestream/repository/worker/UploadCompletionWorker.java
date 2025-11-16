@@ -5,14 +5,14 @@ import org.jboss.logging.Logger;
 
 /**
  * Background worker that completes S3 multipart uploads.
- * 
+ * <p>
  * Flow:
  * 1. Check when all chunks uploaded
  * 2. Complete S3 multipart upload
  * 3. Update MySQL node record
  * 4. Publish Kafka completion event
  * 5. Clean up Redis state
- * 
+ * <p>
  * Design reference: docs/new-design/03-s3-multipart.md
  */
 @ApplicationScoped

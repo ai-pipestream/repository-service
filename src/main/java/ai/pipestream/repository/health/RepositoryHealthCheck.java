@@ -24,16 +24,16 @@ public class RepositoryHealthCheck implements HealthCheck {
             // Test database connection
             dataSource.getConnection().close();
 
-            return HealthCheckResponse
-                .up("repository-service")
-                .withData("database", "connected")
-                .build();
+            return HealthCheckResponse.named("repository-service")
+                    .withData("database", "connected")
+                    .up()
+                    .build();
         } catch (Exception e) {
-            return HealthCheckResponse
-                .down("repository-service")
-                .withData("database", "disconnected")
-                .withData("error", e.getMessage())
-                .build();
+            return HealthCheckResponse.named("repository-service")
+                    .withData("database", "disconnected")
+                    .withData("error", e.getMessage())
+                    .down()
+                    .build();
         }
     }
 }

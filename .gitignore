@@ -297,3 +297,5 @@ quarkus.log
 
 # Dev services
 .pipeline/
+.idea
+

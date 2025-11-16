@@ -2,11 +2,17 @@ plugins {
     alias(libs.plugins.java)
     alias(libs.plugins.quarkus)
     alias(libs.plugins.maven.publish)
+    id 'signing'
+    id 'com.gradleup.nmcp' version '1.2.1'
 }
 
+def pipelineBomVersion = findProperty('pipelineBomVersion') ?: '0.2.2'
+
 dependencies {
-    // Use published BOM from Maven Central/Local
-    implementation platform('ai.pipestream:pipeline-bom:0.1.0-SNAPSHOT')
+    implementation 'io.quarkus:quarkus-container-image-docker'
+    // Import pipeline BOM to align all managed versions
+    implementation platform("ai.pipestream:pipeline-bom:${pipelineBomVersion}")
+
 
     // Core Quarkus dependencies
     implementation 'io.quarkus:quarkus-arc'
@@ -32,12 +38,16 @@ dependencies {
     implementation 'io.smallrye.stork:stork-service-discovery-consul'
     implementation 'io.smallrye.reactive:smallrye-mutiny-vertx-consul-client'
 
-    // ai.pipestream libraries (versions from BOM)
-    implementation 'ai.pipestream:grpc-stubs'
-    implementation 'ai.pipestream:dynamic-grpc-registration-clients'
-    implementation 'ai.pipestream:dynamic-grpc'
-    implementation 'ai.pipestream:pipeline-commons'
-    implementation 'ai.pipestream:devservices'
+    // Pipeline libraries (published to Maven Local)
+    testImplementation libs.pipestream.grpc.wiremock
+    // Pipestream libraries - versions managed entirely by the BOM/catalog
+    implementation libs.pipestream.compose.devservices
+    implementation libs.pipestream.grpc.stubs
+    implementation libs.pipestream.api
+    implementation libs.pipestream.data.util
+    implementation libs.pipestream.commons
+    implementation libs.pipestream.dynamic.grpc
+    implementation libs.pipestream.dynamic.grpc.registration.clients
 
     // Utilities
     implementation libs.commons.lang3
@@ -52,7 +62,7 @@ dependencies {
 }
 
 group = 'ai.pipestream'
-version = '0.1.0-SNAPSHOT'
+version = "${pipelineBomVersion}"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_21
@@ -90,15 +100,15 @@ publishing {
 
                 licenses {
                     license {
-                        name.set('Apache License 2.0')
-                        url.set('https://www.apache.org/licenses/LICENSE-2.0')
+                        name.set('MIT License')
+                        url.set('https://www.opensource.org/licenses/MIT')
                     }
                 }
 
                 developers {
                     developer {
                         id.set('krickert')
-                        email.set('krickert@rokkon.com')
+                        email.set('krickert@pipestream.ai')
                         name.set('Pipeline Engine Team')
                     }
                 }
