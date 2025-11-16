@@ -1,0 +1,3 @@
+-- Import SQL for tests
+-- This file is loaded when running tests with drop-and-create schema strategy
+-- For Phase 1, we don't need any pre-populated data since we're only testing in-memory state
