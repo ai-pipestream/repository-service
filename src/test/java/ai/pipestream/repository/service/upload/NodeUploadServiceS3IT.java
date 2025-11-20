@@ -4,9 +4,13 @@ import ai.pipestream.data.v1.Blob;
 import ai.pipestream.data.v1.BlobBag;
 import ai.pipestream.data.v1.PipeDoc;
 import ai.pipestream.data.v1.SearchMetadata;
+import ai.pipestream.repository.filesystem.upload.NodeUploadServiceGrpc;
 import ai.pipestream.repository.filesystem.upload.UploadResponse;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Timestamp;
+import io.quarkus.grpc.GrpcClient;
+import io.quarkus.grpc.GrpcService;
+import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,13 +24,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Integration test for NodeUploadService with real S3 (MinIO).
- * 
+ * <p> 
  * This test verifies that:
  * 1. PipeDoc can be serialized and uploaded to S3
  * 2. S3 key generation follows the expected pattern: account/connector/path/docId-filename
  * 3. The service returns proper UploadResponse with S3 metadata
  * 4. Large messages can be uploaded successfully
- * 
+ * <p> 
  * Prerequisites:
  * - MinIO running on localhost:9010 (test profile)
  * - Bucket "pipeline-documents" must exist (or be created by test)
@@ -34,8 +38,9 @@ import static org.junit.jupiter.api.Assertions.*;
 @QuarkusTest
 class NodeUploadServiceS3IT {
 
-    @Inject
-    NodeUploadServiceImpl uploadService;
+    @InjectMock
+    @GrpcClient("node-upload-service")
+    NodeUploadServiceGrpc.NodeUploadServiceBlockingStub uploadService;
 
     @Inject
     S3AsyncClient s3Client;
@@ -82,8 +87,7 @@ class NodeUploadServiceS3IT {
         );
 
         // Act
-        UploadResponse response = uploadService.uploadPipeDoc(pipeDoc)
-                .await().indefinitely();
+        UploadResponse response = uploadService.uploadPipeDoc(pipeDoc);
 
         // Assert
         assertTrue(response.getSuccess(), "Upload should succeed");
@@ -97,8 +101,8 @@ class NodeUploadServiceS3IT {
         assertTrue(response.getS3Key().endsWith("-test-file.txt"),
                 "S3 key should end with -filename");
 
-        // Verify file exists in S3
-        verifyFileInS3(response.getS3Key(), contentBytes.length);
+        // Verify file exists in S3 (we upload the serialized PipeDoc)
+        verifyFileInS3(response.getS3Key(), pipeDoc.toByteArray().length);
     }
 
     @Test
@@ -121,8 +125,7 @@ class NodeUploadServiceS3IT {
 
         // Act
         long startTime = System.nanoTime();
-        UploadResponse response = uploadService.uploadPipeDoc(pipeDoc)
-                .await().indefinitely();
+        UploadResponse response = uploadService.uploadPipeDoc(pipeDoc);
         long duration = System.nanoTime() - startTime;
 
         // Assert
@@ -130,8 +133,8 @@ class NodeUploadServiceS3IT {
         assertNotNull(response.getDocumentId());
         assertNotNull(response.getS3Key());
 
-        // Verify file exists in S3
-        verifyFileInS3(response.getS3Key(), fileSize);
+        // Verify file exists in S3 (we upload the serialized PipeDoc)
+        verifyFileInS3(response.getS3Key(), pipeDoc.toByteArray().length);
 
         // Log performance
         double seconds = duration / 1_000_000_000.0;
@@ -168,8 +171,7 @@ class NodeUploadServiceS3IT {
                 .build();
 
         // Act
-        UploadResponse response = uploadService.uploadPipeDoc(pipeDoc)
-                .await().indefinitely();
+        UploadResponse response = uploadService.uploadPipeDoc(pipeDoc);
 
         // Assert
         assertTrue(response.getSuccess());
@@ -192,8 +194,7 @@ class NodeUploadServiceS3IT {
         );
 
         // Act
-        UploadResponse response = uploadService.uploadPipeDoc(pipeDoc)
-                .await().indefinitely();
+        UploadResponse response = uploadService.uploadPipeDoc(pipeDoc);
 
         // Assert
         assertTrue(response.getSuccess());

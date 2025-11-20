@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Test compose file for repository-service tests
 # Provides MySQL, Redis, Kafka, and Apicurio Registry services for integration tests
 
@@ -8,90 +6,134 @@ networks:
     driver: bridge
 
 services:
-  pipeline-mysql:
-    image: mysql:8.0
+  # MySQL instance for tests (optimized for speed)
+  mysql-test:
     container_name: pipeline-mysql-test
+    image: mysql:8.0
     networks:
       - pipeline-test-network
-    ports:
-      - "3307:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: pipeline_repository_test
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: pipeline_account_test
       MYSQL_USER: pipeline
       MYSQL_PASSWORD: password
+    command:
+      # Performance optimizations for test environment (NOT for production!)
+      - --innodb-flush-log-at-trx-commit=0
+      - --innodb-doublewrite=0
+      - --skip-log-bin
+      - --performance-schema=0
+      - --innodb-buffer-pool-size=256M
+    ports:
+      - "3307:3306"  # Test port (dev uses 3306)
+    volumes:
+      - mysql_test_data:/var/lib/mysql
+    labels:
+      # Quarkus devservices label to prevent automatic MySQL devservice creation
+      quarkus-dev-service-mysql: test
+      # Wait for MySQL to be ready before considering service started
+      io.quarkus.devservices.compose.wait_for.logs: ".*ready for connections.*"
+      # Map MySQL JDBC URL to datasource property
+      io.quarkus.devservices.compose.config_map.jdbc_url: quarkus.datasource.jdbc.url
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
+      interval: 3s
       timeout: 5s
       retries: 10
+      start_period: 10s
 
-  pipeline-redis:
-    image: redis:7-alpine
-    container_name: pipeline-redis-test
+  # Init service to create Apicurio database (schema auto-created by Apicurio)
+  # This approach works in both local and CI/DinD environments
+  # Runs in parallel with Apicurio startup - Apicurio will wait for DB to be ready
+  init-db:
+    image: mysql:8.0
+    depends_on:
+      mysql-test:
+        condition: service_healthy
+    command: >
+      bash -c "
+      until mysql -h mysql-test -u root -prootpassword -e 'SELECT 1' >/dev/null 2>&1; do
+        echo 'Waiting for MySQL...';
+        sleep 1;
+      done;
+      mysql -h mysql-test -u root -prootpassword -e \"
+      CREATE DATABASE IF NOT EXISTS apicurio_registry;
+      CREATE DATABASE IF NOT EXISTS pipeline_repository_test;
+      GRANT ALL PRIVILEGES ON apicurio_registry.* TO 'pipeline'@'%';
+      GRANT ALL PRIVILEGES ON pipeline_repository_test.* TO 'pipeline'@'%';
+      FLUSH PRIVILEGES;
+      \"
+      "
     networks:
       - pipeline-test-network
-    ports:
-      - "6380:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+    labels:
+      # Mark as Quarkus devservice so it's recognized by compose devservices
+      quarkus-dev-service-init-db: test
 
-  pipeline-kafka:
-    image: apache/kafka:3.9.0
+  # Redpanda for Kafka-compatible messaging (test instance)
+  kafka-test:
     container_name: pipeline-kafka-test
+    image: redpandadata/redpanda:latest
+    hostname: kafka-test
+    networks:
+      - pipeline-test-network
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:9094
+      # Docker bridge gateway: 172.17.0.1 (Linux) or host.docker.internal (Mac/Windows)
+      # Default to 172.17.0.1 for Linux/DinD environments
+      - --advertise-kafka-addr internal://kafka-test:9092,external://${DOCKER_GATEWAY_HOST:-172.17.0.1}:9095
+    ports:
+      - "9095:9094"     # External port for localhost access
+    labels:
+      quarkus-dev-service-kafka: test
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+      start_period: 5s
+
+  # Apicurio Registry for schema management (test instance)
+  apicurio-registry-test:
+    container_name: pipeline-apicurio-registry-test
+    image: apicurio/apicurio-registry:3.0.12
     networks:
       - pipeline-test-network
     ports:
-      - "9093:9092"
+      - "8082:8080"     # Test port (dev uses 8081)
+    depends_on:
+      mysql-test:
+        condition: service_healthy
     environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9093
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_NUM_NETWORK_THREADS: 3
-      KAFKA_NUM_IO_THREADS: 8
-      KAFKA_LOG_RETENTION_HOURS: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      APICURIO_DATASOURCE_URL: 'jdbc:mysql://mysql-test:3306/apicurio_registry'
+      APICURIO_DATASOURCE_USERNAME: 'pipeline'
+      APICURIO_DATASOURCE_PASSWORD: 'password'
+      # Auto-initialize schema (default: true, but explicit for clarity)
+      APICURIO_SQL_INIT: 'true'
+      APICURIO_STORAGE_KIND: 'sql'
+      APICURIO_STORAGE_SQL_KIND: 'mysql'
+      QUARKUS_HTTP_PORT: 8080
+      QUARKUS_LOG_LEVEL: 'INFO'
+      LOG_LEVEL: 'INFO'
+      QUARKUS_HTTP_CORS_ORIGINS: '*'
+      QUARKUS_PROFILE: 'prod'
+    labels:
+      # Wait for Apicurio to be ready before considering service started
+      io.quarkus.devservices.compose.wait_for.logs: ".*Listening on.*"
+      # Map the exposed port to apicurio registry URL property
+      # Port 8080 inside container is exposed as 8082 on host (see ports: "8082:8080")
+      # Quarkus will automatically use the host-side port (8082) for this mapping
+      io.quarkus.devservices.compose.config_map.8080: mp.messaging.connector.smallrye-kafka.apicurio.registry.url
     healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
-      timeout: 10s
+      timeout: 5s
       retries: 10
       start_period: 30s
 
-  pipeline-apicurio-registry:
-    image: apicurio/apicurio-registry:3.0.6
-    container_name: pipeline-apicurio-test
-    networks:
-      - pipeline-test-network
-    ports:
-      - "8082:8080"
-    environment:
-      APICURIO_STORAGE_KIND: kafkasql
-      APICURIO_KAFKASQL_BOOTSTRAP_SERVERS: pipeline-kafka:9092
-      APICURIO_KAFKASQL_TOPIC: _apicurio-registry
-      APICURIO_KAFKASQL_TOPIC_AUTO_CREATE: "true"
-      QUARKUS_HTTP_PORT: 8080
-      LOG_LEVEL: INFO
-    depends_on:
-      pipeline-kafka:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 40s
 
   pipeline-minio:
     image: minio/minio:latest
@@ -115,4 +157,5 @@ services:
       - minio-test-data:/data
 
 volumes:
+  mysql_test_data:
   minio-test-data:
