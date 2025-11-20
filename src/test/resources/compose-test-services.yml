@@ -92,3 +92,27 @@ services:
       timeout: 5s
       retries: 10
       start_period: 40s
+
+  pipeline-minio:
+    image: minio/minio:latest
+    container_name: pipeline-minio-test
+    networks:
+      - pipeline-test-network
+    ports:
+      - "9010:9000"  # API port
+      - "9011:9001"   # Console port (optional)
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    volumes:
+      - minio-test-data:/data
+
+volumes:
+  minio-test-data:

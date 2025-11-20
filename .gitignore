@@ -299,3 +299,4 @@ quarkus.log
 .pipeline/
 .idea
 
+bin

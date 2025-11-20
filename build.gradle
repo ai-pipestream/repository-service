@@ -6,12 +6,13 @@ plugins {
     id 'com.gradleup.nmcp' version '1.2.1'
 }
 
-def pipelineBomVersion = findProperty('pipelineBomVersion') ?: '0.2.2'
+def pipelineBomVersion = findProperty('pipelineBomVersion') ?: '0.2.6-SNAPSHOT'
 
 dependencies {
     implementation 'io.quarkus:quarkus-container-image-docker'
     // Import pipeline BOM to align all managed versions
     implementation platform("ai.pipestream:pipeline-bom:${pipelineBomVersion}")
+    implementation platform("io.quarkus.platform:quarkus-amazon-services-bom:${quarkusPlatformVersion}")
 
 
     // Core Quarkus dependencies
@@ -25,6 +26,8 @@ dependencies {
     implementation 'io.quarkus:quarkus-smallrye-health'
     implementation 'io.quarkus:quarkus-smallrye-openapi'
     implementation 'io.quarkus:quarkus-container-image-docker'
+    implementation 'io.quarkiverse.amazonservices:quarkus-amazon-s3'
+    implementation 'software.amazon.awssdk:netty-nio-client'
 
     // Redis support
     implementation 'io.quarkus:quarkus-redis-client'
@@ -80,6 +83,11 @@ compileJava {
 
 compileTestJava {
     options.encoding = 'UTF-8'
+}
+
+// Fix for "Unexpected end of ZLIB input stream" - enable ZIP64 for large JARs
+tasks.withType(Jar).configureEach {
+    zip64 = true
 }
 
 // Publishing configuration
