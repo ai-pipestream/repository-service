@@ -9,6 +9,7 @@ import ai.pipestream.repository.filesystem.upload.UploadResponse;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Timestamp;
 import io.quarkus.grpc.GrpcClient;
+import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,8 +33,12 @@ import static org.junit.jupiter.api.Assertions.*;
  * Prerequisites:
  * - MinIO running on localhost:9010 (test profile)
  * - Bucket "pipeline-documents" must exist (or be created by test)
+ * 
+ * Note: Uses QuarkusTestResource to configure the gRPC client to connect to the
+ * separate gRPC server port when use-separate-server=true.
  */
 @QuarkusTest
+@QuarkusTestResource(NodeUploadServiceTestResource.class)
 class NodeUploadServiceS3IT {
 
     @GrpcClient("node-upload-service")
