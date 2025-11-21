@@ -6,7 +6,7 @@ plugins {
     id 'com.gradleup.nmcp' version '1.2.1'
 }
 
-def pipelineBomVersion = findProperty('pipelineBomVersion') ?: '0.2.6-SNAPSHOT'
+def pipelineBomVersion = findProperty('pipelineBomVersion') ?: '0.2.10-SNAPSHOT'
 
 dependencies {
     implementation 'io.quarkus:quarkus-container-image-docker'

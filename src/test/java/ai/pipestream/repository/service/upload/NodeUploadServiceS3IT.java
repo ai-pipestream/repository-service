@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * Prerequisites:
  * - MinIO running on localhost:9010 (test profile)
  * - Bucket "pipeline-documents" must exist (or be created by test)
- * 
+ * <p>
  * Note: Uses QuarkusTestResource to configure the gRPC client to connect to the
  * separate gRPC server port when use-separate-server=true.
  */

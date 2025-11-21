@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.UUID;
 import io.pipeline.repository.util.HashUtil;
 import io.pipeline.repository.util.RequestContext;
+import ai.pipestream.grpc.util.KafkaProtobufKeys;
 
 /**
  * Reactive implementation of EventPublisher using the new RepositoryEvent structure.
@@ -83,7 +84,7 @@ public class ReactiveEventPublisherImpl implements EventPublisher {
                 .build();
 
             // Use deterministic partition key
-            UUID messageKey = HashUtil.generatePartitionKey(documentId);
+            UUID messageKey = KafkaProtobufKeys.uuid(event);
             
             Message<RepositoryEvent> message = Message.of(event)
                 .addMetadata(OutgoingKafkaRecordMetadata.<UUID>builder()
@@ -147,7 +148,7 @@ public class ReactiveEventPublisherImpl implements EventPublisher {
                 .build();
 
             // Use deterministic partition key
-            UUID messageKey = HashUtil.generatePartitionKey(documentId);
+            UUID messageKey = KafkaProtobufKeys.uuid(event);
             
             Message<RepositoryEvent> message = Message.of(event)
                 .addMetadata(OutgoingKafkaRecordMetadata.<UUID>builder()
@@ -203,7 +204,7 @@ public class ReactiveEventPublisherImpl implements EventPublisher {
                 .setDeleted(deleted)  // Use the oneof field
                 .build();
 
-            UUID messageKey = HashUtil.generatePartitionKey(documentId);
+            UUID messageKey = KafkaProtobufKeys.uuid(event);
             
             Message<RepositoryEvent> message = Message.of(event)
                 .addMetadata(OutgoingKafkaRecordMetadata.<UUID>builder()
