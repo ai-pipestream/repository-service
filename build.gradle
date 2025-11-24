@@ -28,6 +28,7 @@ dependencies {
     implementation 'io.quarkus:quarkus-container-image-docker'
     implementation 'io.quarkiverse.amazonservices:quarkus-amazon-s3'
     implementation 'software.amazon.awssdk:netty-nio-client'
+    implementation 'software.amazon.awssdk:s3-transfer-manager'
 
     // Redis support
     implementation 'io.quarkus:quarkus-redis-client'
@@ -59,8 +60,8 @@ dependencies {
     // Testing
     testImplementation 'io.quarkus:quarkus-junit5'
     testImplementation 'io.quarkus:quarkus-junit5-mockito'
-    testImplementation 'io.rest-assured:rest-assured'
     testImplementation 'org.testcontainers:mysql'
+    testImplementation libs.awaitility
     runtimeOnly libs.quarkus.logging.manager
 }
 

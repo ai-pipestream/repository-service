@@ -89,6 +89,8 @@ services:
       - "9095:9094"     # External port for localhost access
     labels:
       quarkus-dev-service-kafka: test
+      # Map Kafka port to bootstrap servers property
+      io.quarkus.devservices.compose.config_map.9094: kafka.bootstrap.servers
     healthcheck:
       test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
       interval: 3s

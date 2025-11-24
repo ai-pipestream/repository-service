@@ -30,6 +30,12 @@ public class Document extends PanacheEntity {
     public String storageLocation;
 
     @Column(nullable = false)
+    public String bucketName;
+
+    @Column(nullable = false)
+    public String connectorId;
+
+    @Column(nullable = false)
     public String checksum;
 
     @Column(nullable = false)
@@ -39,7 +45,7 @@ public class Document extends PanacheEntity {
     public Instant updatedAt;
 
     @Column(nullable = false)
-    public Integer version;
+    public String version;
 
     @Column(nullable = false)
     public String status;
