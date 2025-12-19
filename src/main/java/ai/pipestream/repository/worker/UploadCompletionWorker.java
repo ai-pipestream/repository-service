@@ -11,7 +11,7 @@ import org.jboss.logging.Logger;
  * 2. Complete S3 multipart upload
  * 3. Update MySQL node record
  * 4. Publish Kafka completion event
- * 5. Clean up Redis state
+ * 5. Clean up upload session state (DB-backed)
  * <p>
  * Design reference: docs/new-design/03-s3-multipart.md
  */
@@ -29,5 +29,5 @@ public class UploadCompletionWorker {
     // - Complete S3 multipart upload with ETags
     // - Update database
     // - Publish Kafka event
-    // - Clean up Redis
+    // - Clean up upload session state
 }

@@ -4,8 +4,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import org.jboss.logging.Logger;
 
 /**
- * Service for managing Redis cache operations.
- * Handles caching of frequently accessed documents and metadata.
+ * Service for managing cache operations.
+ * Handles caching of frequently accessed documents and metadata (implementation TBD).
  */
 @ApplicationScoped
 public class CacheService {

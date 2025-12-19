@@ -24,12 +24,12 @@ public class NodeUploadService {
     // - Generate node_id (or use client-provided)
     // - Create MySQL node record (status=PENDING)
     // - Initiate S3 multipart upload
-    // - Initialize Redis state
+    // - Initialize upload session state (DB-backed)
     // - Return response immediately
     
     // TODO: Implement UploadChunk gRPC endpoint (unary)
     // - Validate upload_id exists
-    // - Store chunk in Redis
+    // - Persist chunk/session state (DB-backed) or stream directly to object storage
     // - Update received_chunks counter
     // - Publish chunk_received event
     // - Return acknowledgment immediately

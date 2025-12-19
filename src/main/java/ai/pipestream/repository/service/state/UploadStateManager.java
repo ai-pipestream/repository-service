@@ -4,15 +4,10 @@ import jakarta.enterprise.context.ApplicationScoped;
 import org.jboss.logging.Logger;
 
 /**
- * Manages upload state in Redis.
+ * Manages upload state.
  * <p>
- * Data structures:
- * - upload:{upload_id}:state          → Hash (status, total_chunks, received_chunks, etc.)
- * - upload:{upload_id}:chunks:{n}     → String (binary chunk data) + TTL
- * - upload:{upload_id}:etags          → Sorted Set (chunk_number → etag)
- * - upload:{upload_id}:metadata       → Hash (sha256, size, mime_type, etc.)
- * <p>
- * Design reference: docs/new-design/02-redis-queuing.md
+ * Phase-1 note: Phase 1 uses unary `SavePipeDoc` and an in-memory placeholder implementation.
+ * Later phases may add durable upload session tracking (DB-backed) for multipart/streaming uploads.
  */
 @ApplicationScoped
 public class UploadStateManager {
@@ -23,11 +18,5 @@ public class UploadStateManager {
         LOG.info("UploadStateManager initialized");
     }
 
-    // TODO: Implement Redis state management methods
-    // - initializeUpload(uploadId, nodeId, s3UploadId, s3Key)
-    // - storeChunk(uploadId, chunkNumber, data)
-    // - addETag(uploadId, chunkNumber, etag)
-    // - getState(uploadId)
-    // - incrementReceivedChunks(uploadId)
-    // - setTotalChunks(uploadId, totalChunks)
+    // TODO: Implement upload session state management methods for multipart/streaming phases
 }

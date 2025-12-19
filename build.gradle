@@ -4,19 +4,42 @@ plugins {
     alias(libs.plugins.maven.publish)
     id 'signing'
     id 'com.gradleup.nmcp' version '1.2.1'
+    id 'ai.pipestream.proto-toolchain' version '0.7.7'
 }
 
-def pipelineBomVersion = findProperty('pipelineBomVersion') ?: '0.2.2'
+def pipestreamBomVersion = findProperty('pipestreamBomVersion') ?: '0.7.9'
+
+// Proto toolchain configuration - fetches from Git and generates Java/gRPC code
+pipestreamProtos {
+    sourceMode = 'git'
+
+    modules {
+        register("common") {
+            gitRepo = "https://github.com/ai-pipestream/pipestream-protos.git"
+            gitRef = "main"
+            gitSubdir = "common"
+        }
+        register("repo") {
+            gitRepo = "https://github.com/ai-pipestream/pipestream-protos.git"
+            gitRef = "main"
+            gitSubdir = "repo"
+        }
+    }
+}
 
 dependencies {
     implementation 'io.quarkus:quarkus-container-image-docker'
-    // Import pipeline BOM to align all managed versions
-    implementation platform("ai.pipestream:pipeline-bom:${pipelineBomVersion}")
+    // Import pipestream BOM to align all managed versions
+    implementation platform("ai.pipestream:pipestream-bom:${pipestreamBomVersion}")
+    // Import Amazon Services BOM for S3
+    implementation platform("io.quarkus.platform:quarkus-amazon-services-bom:${quarkusPlatformVersion}")
 
 
     // Core Quarkus dependencies
     implementation 'io.quarkus:quarkus-arc'
     implementation 'io.quarkus:quarkus-grpc'
+    implementation 'io.quarkus:quarkus-rest'
+    implementation 'io.quarkus:quarkus-rest-jackson'
     implementation 'io.grpc:grpc-services'
     implementation 'io.quarkus:quarkus-hibernate-orm-panache'
     implementation 'io.quarkus:quarkus-jdbc-mysql'
@@ -26,8 +49,10 @@ dependencies {
     implementation 'io.quarkus:quarkus-smallrye-openapi'
     implementation 'io.quarkus:quarkus-container-image-docker'
 
-    // Redis support
-    implementation 'io.quarkus:quarkus-redis-client'
+    // S3 client (MinIO/AWS)
+    implementation 'io.quarkiverse.amazonservices:quarkus-amazon-s3'
+    // Required HTTP client for AWS SDK (Quarkus Amazon Services requires this)
+    implementation libs.aws.sdk.netty.nio
 
     // Kafka and messaging
     implementation 'io.quarkus:quarkus-messaging-kafka'
@@ -38,16 +63,12 @@ dependencies {
     implementation 'io.smallrye.stork:stork-service-discovery-consul'
     implementation 'io.smallrye.reactive:smallrye-mutiny-vertx-consul-client'
 
-    // Pipeline libraries (published to Maven Local)
-    testImplementation libs.pipestream.grpc.wiremock
-    // Pipestream libraries - versions managed entirely by the BOM/catalog
-    implementation libs.pipestream.compose.devservices
-    implementation libs.pipestream.grpc.stubs
-    implementation libs.pipestream.api
-    implementation libs.pipestream.data.util
-    implementation libs.pipestream.commons
-    implementation libs.pipestream.dynamic.grpc
-    implementation libs.pipestream.dynamic.grpc.registration.clients
+    // Pipestream platform libraries (managed via BOM/catalog)
+    implementation 'ai.pipestream:pipestream-quarkus-devservices'
+    implementation 'ai.pipestream:quarkus-dynamic-grpc'
+    implementation 'ai.pipestream:pipestream-service-registration'
+
+    testImplementation 'ai.pipestream:pipestream-wiremock-server'
 
     // Utilities
     implementation libs.commons.lang3
@@ -72,7 +93,7 @@ dependencies {
 }
 
 group = 'ai.pipestream'
-version = "${pipelineBomVersion}"
+version = "${pipestreamBomVersion}"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_21

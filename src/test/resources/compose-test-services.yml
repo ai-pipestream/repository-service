@@ -1,7 +1,7 @@
 version: '3.8'
 
 # Test compose file for repository-service tests
-# Provides MySQL, Redis, Kafka, and Apicurio Registry services for integration tests
+# Provides MySQL, Kafka, and Apicurio Registry services for integration tests
 
 networks:
   pipeline-test-network:
@@ -24,19 +24,6 @@ services:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 5s
       timeout: 5s
-      retries: 10
-
-  pipeline-redis:
-    image: redis:7-alpine
-    container_name: pipeline-redis-test
-    networks:
-      - pipeline-test-network
-    ports:
-      - "6380:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
       retries: 10
 
   pipeline-kafka:
