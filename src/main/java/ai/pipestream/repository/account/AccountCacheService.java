@@ -74,7 +74,7 @@ public class AccountCacheService {
      * Recursively pages through all accounts to warm the cache.
      */
     private Uni<Integer> warmCache(String pageToken) {
-        return grpcClientFactory.getClient("account-service", MutinyAccountServiceGrpc::newMutinyStub)
+        return grpcClientFactory.getClient("account-manager", MutinyAccountServiceGrpc::newMutinyStub)
                 .flatMap(client -> {
                     ListAccountsRequest.Builder request = ListAccountsRequest.newBuilder()
                             .setPageSize(PAGE_SIZE)
@@ -181,7 +181,7 @@ public class AccountCacheService {
      * Lookup account via gRPC.
      */
     private Uni<Account> lookupAccount(String accountId) {
-        return grpcClientFactory.getClient("account-service", MutinyAccountServiceGrpc::newMutinyStub)
+        return grpcClientFactory.getClient("account-manager", MutinyAccountServiceGrpc::newMutinyStub)
                 .flatMap(client -> client.getAccount(
                         GetAccountRequest.newBuilder()
                                 .setAccountId(accountId)
