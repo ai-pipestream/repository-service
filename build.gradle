@@ -7,7 +7,7 @@ plugins {
     id 'ai.pipestream.proto-toolchain' version '0.7.7'
 }
 
-def pipestreamBomVersion = findProperty('pipestreamBomVersion') ?: '0.7.9'
+def pipestreamBomVersion = findProperty('pipestreamBomVersion') ?: '0.7.10'
 
 // Proto toolchain configuration - fetches from Git and generates Java/gRPC code
 pipestreamProtos {
@@ -42,15 +42,15 @@ dependencies {
     implementation 'io.quarkus:quarkus-rest-jackson'
     implementation 'io.grpc:grpc-services'
     implementation 'io.quarkus:quarkus-hibernate-orm-panache'
-    implementation 'io.quarkus:quarkus-jdbc-mysql'
+    implementation 'io.quarkus:quarkus-jdbc-postgresql'
     implementation 'io.quarkus:quarkus-flyway'
-    implementation 'org.flywaydb:flyway-mysql'
     implementation 'io.quarkus:quarkus-smallrye-health'
     implementation 'io.quarkus:quarkus-smallrye-openapi'
     implementation 'io.quarkus:quarkus-container-image-docker'
 
     // S3 client (MinIO/AWS)
     implementation 'io.quarkiverse.amazonservices:quarkus-amazon-s3'
+    implementation 'software.amazon.awssdk:s3-transfer-manager'
     // Required HTTP client for AWS SDK (Quarkus Amazon Services requires this)
     implementation libs.aws.sdk.netty.nio
 
@@ -88,7 +88,7 @@ dependencies {
     testImplementation 'io.quarkus:quarkus-junit5'
     testImplementation 'io.quarkus:quarkus-junit5-mockito'
     testImplementation 'io.rest-assured:rest-assured'
-    testImplementation 'org.testcontainers:mysql'
+    testImplementation 'org.testcontainers:postgresql'
     runtimeOnly libs.quarkus.logging.manager
 }
 
@@ -101,6 +101,7 @@ java {
 }
 
 test {
+    maxHeapSize = "10g"
     systemProperty "java.util.logging.manager", "org.jboss.logmanager.LogManager"
 }
 
