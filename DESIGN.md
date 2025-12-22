@@ -55,9 +55,30 @@ Kafka events are a stable integration surface:
 - Inline bytes: `Blob.content = data`
 - External storage: `Blob.content = storage_ref (drive_name + object_key + optional version_id)`
 
-This enables the core “claim-check” pattern:
+This enables the core "claim-check" pattern:
 - Large payloads are stored externally; the PipeDoc carries a pointer.
 - Small payloads can be inlined for convenience.
+
+### Two-level claim-check: PipeDoc and Blob storage
+
+The claim-check pattern applies at **two levels**:
+
+1. **Blob level**: Raw document bytes (e.g., PDF, image) are stored in S3. The `Blob` within the PipeDoc contains a `storage_ref` pointing to the S3 object.
+
+2. **PipeDoc level**: The serialized PipeDoc protobuf itself is stored in S3, not in the database. The database stores only metadata and S3 references.
+
+**Why store PipeDoc in S3 (not database)?**
+- **Security**: Database access should not expose document content. S3 with customer-supplied KMS keys provides better encryption control.
+- **Stream not storage**: This is a streaming system. The database tracks and indexes; S3 stores payloads.
+- **Customer-supplied S3**: Customers provide their own bucket and KMS key. Storage costs are theirs, not ours.
+- **Scalability**: S3 is multi-region and scales automatically. PostgreSQL blob storage is expensive and less scalable.
+
+**Database role**: The `pipedocs` table stores metadata (doc_id, checksum, drive_name, object_key, version_id, etag, size, timestamps) for:
+- Quick pipeline operations and queries
+- Source of truth for document lifecycle tracking
+- Enabling OpenSearch to index metadata for fast search
+
+**Optional persistence**: For customers who don't want S3 storage (sensitive documents), pure gRPC mode can process documents without persistence. The repository service is entirely optional in the pipeline.
 
 ### Repository service APIs
 There are multiple service surfaces in the repo protos. Conceptually they converge on one domain operation: **store bytes and store metadata**.

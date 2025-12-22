@@ -4,37 +4,47 @@ import ai.pipestream.data.v1.Blob;
 import ai.pipestream.data.v1.BlobBag;
 import ai.pipestream.data.v1.ChecksumType;
 import ai.pipestream.data.v1.FileStorageReference;
+import ai.pipestream.data.v1.OwnershipContext;
 import ai.pipestream.data.v1.PipeDoc;
+import ai.pipestream.repository.account.AccountCacheService;
 import ai.pipestream.repository.entity.PipeDocRecord;
+import ai.pipestream.repository.kafka.RepositoryEventEmitter;
 import ai.pipestream.repository.s3.S3Config;
-import io.quarkus.hibernate.orm.panache.Panache;
-import io.smallrye.common.annotation.Blocking;
+import io.quarkus.hibernate.reactive.panache.Panache;
+import io.smallrye.mutiny.Uni;
+import io.smallrye.mutiny.infrastructure.Infrastructure;
+import io.smallrye.mutiny.vertx.MutinyHelper;
+import io.vertx.core.Context;
 import jakarta.inject.Inject;
-import jakarta.transaction.Transactional;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
-import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 
-import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.Objects;
+import java.util.HexFormat;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
 
 /**
  * Phase 1 (Option 1): single-request HTTP upload.
  *
  * Intake proxies this request and hydrates identity/metadata via headers.
  * Repo-service is the only component that talks to S3 and persists the PipeDoc-for-parsing.
+ *
+ * Reactive Implementation - Zero Disk IO.
  */
 @Path("/internal/uploads")
 public class RawUploadResource {
@@ -42,151 +52,200 @@ public class RawUploadResource {
     private static final Logger LOG = Logger.getLogger(RawUploadResource.class);
 
     @Inject
-    S3AsyncClient s3;
+    S3AsyncClient s3AsyncClient;
 
     @Inject
     S3Config s3Config;
+
+    @Inject
+    AccountCacheService accountCacheService;
+
+    @Inject
+    RepositoryEventEmitter eventEmitter;
+
+    @Inject
+    io.vertx.mutiny.core.Vertx vertx;
 
     /**
      * Raw octet-stream upload (single request).
      *
      * Receipt is returned after:
-     * - S3 upload completes, AND
+     * - S3 upload completes (Streamed directly, no disk buffering), AND
      * - DB commit completes for the PipeDocRecord.
      */
     @POST
     @Path("/raw")
-    @Consumes(MediaType.APPLICATION_OCTET_STREAM)
+    @Consumes(MediaType.WILDCARD)
     @Produces(MediaType.APPLICATION_JSON)
-    @Blocking
-    public RawUploadReceipt uploadRaw(
+    public Uni<RawUploadReceipt> uploadRaw(
             InputStream body,
+            @HeaderParam("Content-Length") Long contentLength,
             @HeaderParam("x-account-id") String accountId,
             @HeaderParam("x-connector-id") String connectorId,
             @HeaderParam("x-doc-id") String docId,
             @HeaderParam("x-drive-name") String driveName,
             @HeaderParam("x-filename") String filename,
             @HeaderParam("x-checksum-sha256") String checksumSha256,
+            @HeaderParam("x-request-id") String requestId,
             @HeaderParam("content-type") String contentType
-    ) throws IOException {
+    ) {
+        // Capture context for restoring after async S3 operations
+        io.vertx.core.Context requestContext = io.vertx.mutiny.core.Vertx.currentContext().getDelegate();
 
-        Objects.requireNonNull(body, "body must not be null");
+        if (body == null) {
+            return Uni.createFrom().failure(new IllegalArgumentException("body must not be null"));
+        }
+        if (contentLength == null || contentLength <= 0) {
+            return Uni.createFrom().failure(new IllegalArgumentException("Content-Length header is required"));
+        }
         if (accountId == null || accountId.isBlank()) {
-            throw new IllegalArgumentException("x-account-id is required");
+            return Uni.createFrom().failure(new IllegalArgumentException("x-account-id is required"));
         }
         if (connectorId == null || connectorId.isBlank()) {
-            throw new IllegalArgumentException("x-connector-id is required");
+            return Uni.createFrom().failure(new IllegalArgumentException("x-connector-id is required"));
         }
 
-        String resolvedDocId = (docId == null || docId.isBlank()) ? UUID.randomUUID().toString() : docId;
-        String resolvedDriveName = (driveName == null || driveName.isBlank()) ? "default" : driveName;
-        String resolvedFilename = (filename == null || filename.isBlank()) ? (resolvedDocId + ".bin") : filename;
-        String resolvedContentType = (contentType == null || contentType.isBlank())
-                ? MediaType.APPLICATION_OCTET_STREAM
-                : contentType;
+        // 1. Validate Account (Reactive)
+        return accountCacheService.isValidAccount(accountId)
+                .flatMap(isValid -> {
+                    if (!isValid) {
+                        LOG.warnf("Rejected upload: invalid or inactive account_id=%s", accountId);
+                        return Uni.createFrom().failure(new WebApplicationException(
+                                Response.status(Response.Status.FORBIDDEN)
+                                        .entity("{\"error\": \"Account not found or inactive: " + accountId + "\"}")
+                                        .type(MediaType.APPLICATION_JSON)
+                                        .build()));
+                    }
 
-        // NOTE: For the very first cut we spool request bytes to disk to avoid holding the full payload in memory.
-        // This keeps Option-1 semantics (single HTTP request) while staying low-memory.
-        java.nio.file.Path tempFile = Files.createTempFile("repo-upload-", ".bin");
-        long sizeBytes;
-        try {
-            sizeBytes = Files.copy(body, tempFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException e) {
-            safeDelete(tempFile);
-            throw e;
-        }
+                    // Prepare metadata
+                    String resolvedRequestId = (requestId == null || requestId.isBlank())
+                            ? UUID.randomUUID().toString()
+                            : requestId;
+                    String resolvedConnectorId = (connectorId == null || connectorId.isBlank()) ? null : connectorId;
+                    String datasourceId = computeDatasourceId(accountId, resolvedConnectorId);
+                    String resolvedDocId = (docId == null || docId.isBlank()) ? UUID.randomUUID().toString() : docId;
+                    String resolvedDriveName = (driveName == null || driveName.isBlank()) ? "default" : driveName;
+                    String resolvedFilename = (filename == null || filename.isBlank()) ? (resolvedDocId + ".bin") : filename;
+                    String resolvedContentType = (contentType == null || contentType.isBlank())
+                            ? MediaType.APPLICATION_OCTET_STREAM
+                            : contentType;
 
-        String objectKey = buildObjectKey(resolvedDriveName, accountId, connectorId, resolvedDocId, resolvedFilename);
+                    String objectKey = buildObjectKey(resolvedDriveName, accountId, connectorId, resolvedDocId, resolvedFilename);
+                    
+                    LOG.infof("Uploading doc_id=%s to s3://%s/%s (bytes=%d)", resolvedDocId, s3Config.bucket(), objectKey, contentLength);
 
-        LOG.infof("Uploading doc_id=%s to s3://%s/%s (bytes=%d)", resolvedDocId, s3Config.bucket(), objectKey, sizeBytes);
+                    // 2. Upload Raw File to S3 (Streamed Async)
+                    // We use the Worker Pool executor to read from the blocking InputStream
+                    ExecutorService executor = (ExecutorService) Infrastructure.getDefaultWorkerPool();
+                    
+                    return Uni.createFrom().completionStage(
+                            s3AsyncClient.putObject(
+                                    PutObjectRequest.builder()
+                                            .bucket(s3Config.bucket())
+                                            .key(objectKey)
+                                            .contentType(resolvedContentType)
+                                            .contentLength(contentLength)
+                                            .build(),
+                                    AsyncRequestBody.fromInputStream(body, contentLength, executor)
+                            )
+                    ).flatMap(putResponse -> {
+                        String etag = putResponse.eTag();
+                        String versionId = putResponse.versionId();
+                        String resolvedChecksum = (checksumSha256 == null || checksumSha256.isBlank()) ? "" : checksumSha256;
 
-        PutObjectResponse put = s3.putObject(
-                        PutObjectRequest.builder()
-                                .bucket(s3Config.bucket())
-                                .key(objectKey)
-                                .contentType(resolvedContentType)
-                                .contentLength(sizeBytes)
-                                .build(),
-                        AsyncRequestBody.fromFile(tempFile)
-                )
-                .toCompletableFuture()
-                .join();
+                        PipeDoc pipeDoc = buildPipeDocForParsing(
+                                resolvedDocId,
+                                accountId,
+                                datasourceId,
+                                resolvedConnectorId,
+                                resolvedDriveName,
+                                objectKey,
+                                versionId,
+                                resolvedContentType,
+                                resolvedFilename,
+                                contentLength,
+                                resolvedChecksum
+                        );
 
-        safeDelete(tempFile);
+                        String pipedocObjectKey = objectKey + ".pipedoc";
+                        byte[] pipeDocBytes = pipeDoc.toByteArray();
 
-        String etag = put.eTag();
-        String versionId = put.versionId();
+                        // 3. Store PipeDoc protobuf to S3 (Async, Memory-based)
+                        return Uni.createFrom().completionStage(
+                                s3AsyncClient.putObject(
+                                        PutObjectRequest.builder()
+                                                .bucket(s3Config.bucket())
+                                                .key(pipedocObjectKey)
+                                                .contentType("application/x-protobuf")
+                                                .contentLength((long) pipeDocBytes.length)
+                                                .build(),
+                                        AsyncRequestBody.fromBytes(pipeDocBytes)
+                                )
+                        )
+                        .emitOn(runnable -> {
+                            if (requestContext != null) {
+                                requestContext.runOnContext(v -> runnable.run());
+                            } else {
+                                vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
+                            }
+                        })
+                        .flatMap(pipeDocResponse -> {
+                            
+                            // 4. Persist Metadata (Reactive Transaction)
+                            return Panache.withTransaction(() -> {
+                                PipeDocRecord record = new PipeDocRecord();
+                                record.docId = resolvedDocId;
+                                record.accountId = accountId;
+                                record.datasourceId = datasourceId;
+                                record.connectorId = connectorId;
+                                record.driveName = resolvedDriveName;
+                                record.objectKey = objectKey;
+                                record.pipedocObjectKey = pipedocObjectKey;
+                                record.versionId = versionId;
+                                record.etag = etag;
+                                record.sizeBytes = contentLength;
+                                record.contentType = resolvedContentType;
+                                record.filename = resolvedFilename;
+                                record.checksum = resolvedChecksum;
+                                record.createdAt = Instant.now();
+                                return record.persist();
+                            });
+                        }).map(persisted -> {
+                            // 5. Emit Event
+                            eventEmitter.emitCreated(
+                                    resolvedDocId,
+                                    accountId,
+                                    objectKey,
+                                    pipedocObjectKey,
+                                    contentLength,
+                                    resolvedChecksum,
+                                    s3Config.bucket(),
+                                    versionId,
+                                    resolvedRequestId,
+                                    resolvedConnectorId
+                            );
 
-        String resolvedChecksum = (checksumSha256 == null || checksumSha256.isBlank())
-                ? ""
-                : checksumSha256;
-
-        PipeDoc pipeDoc = buildPipeDocForParsing(
-                resolvedDocId,
-                resolvedDriveName,
-                objectKey,
-                versionId,
-                resolvedContentType,
-                resolvedFilename,
-                sizeBytes,
-                resolvedChecksum
-        );
-
-        persistPipeDocRecord(
-                resolvedDocId,
-                resolvedDriveName,
-                objectKey,
-                versionId,
-                etag,
-                sizeBytes,
-                resolvedContentType,
-                resolvedFilename,
-                resolvedChecksum,
-                pipeDoc.toByteArray()
-        );
-
-        return new RawUploadReceipt(
-                resolvedDocId,
-                resolvedChecksum,
-                resolvedDriveName,
-                objectKey,
-                versionId,
-                etag,
-                sizeBytes,
-                resolvedContentType,
-                resolvedFilename,
-                "STORED_PIPEDOC"
-        );
-    }
-
-    @Transactional
-    void persistPipeDocRecord(String docId,
-                              String driveName,
-                              String objectKey,
-                              String versionId,
-                              String etag,
-                              long sizeBytes,
-                              String contentType,
-                              String filename,
-                              String checksum,
-                              byte[] pipeDocBytes) {
-        PipeDocRecord record = new PipeDocRecord();
-        record.docId = docId;
-        record.driveName = driveName;
-        record.objectKey = objectKey;
-        record.versionId = versionId;
-        record.etag = etag;
-        record.sizeBytes = sizeBytes;
-        record.contentType = contentType;
-        record.filename = filename;
-        record.checksum = checksum == null ? "" : checksum;
-        record.pipedocBytes = pipeDocBytes;
-        record.createdAt = Instant.now();
-
-        Panache.getEntityManager().persist(record);
+                            return new RawUploadReceipt(
+                                    resolvedDocId,
+                                    resolvedChecksum,
+                                    resolvedDriveName,
+                                    objectKey,
+                                    versionId,
+                                    etag,
+                                    contentLength,
+                                    resolvedContentType,
+                                    resolvedFilename,
+                                    "STORED_PIPEDOC"
+                            );
+                        });
+                    });
+                });
     }
 
     private static PipeDoc buildPipeDocForParsing(String docId,
+                                                  String accountId,
+                                                  String datasourceId,
+                                                  String connectorId,
                                                   String driveName,
                                                   String objectKey,
                                                   String versionId,
@@ -218,12 +277,35 @@ public class RawUploadResource {
             blob.setChecksumType(ChecksumType.CHECKSUM_TYPE_SHA256);
         }
 
+        OwnershipContext.Builder ownership = OwnershipContext.newBuilder()
+                .setAccountId(accountId)
+                .setDatasourceId(datasourceId);
+        if (connectorId != null && !connectorId.isBlank()) {
+            ownership.setConnectorId(connectorId);
+        }
+
         return PipeDoc.newBuilder()
                 .setDocId(docId)
+                .setOwnership(ownership)
                 .setBlobBag(BlobBag.newBuilder()
                         .setBlob(blob)
                         .build())
                 .build();
+    }
+
+    /**
+     * Compute deterministic datasource ID from account + connector.
+     * Format: first 16 chars of SHA-256(accountId + ":" + connectorId)
+     */
+    private static String computeDatasourceId(String accountId, String connectorId) {
+        String input = accountId + ":" + (connectorId == null ? "" : connectorId);
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash).substring(0, 16);
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not available", e);
+        }
     }
 
     private String buildObjectKey(String driveName, String accountId, String connectorId, String docId, String filename) {
@@ -246,25 +328,12 @@ public class RawUploadResource {
         if (value == null) return "unknown";
         String v = value.trim();
         if (v.isEmpty()) return "unknown";
-        // Minimal safety: drop path separators
         return v.replace("/", "_").replace("\\", "_");
     }
 
     private static String sanitizeFilename(String value) {
         String v = sanitizePathSegment(value);
-        // avoid empty or "." style names
         if (v.equals(".") || v.equals("..")) return "file.bin";
         return v;
     }
-
-    private static void safeDelete(java.nio.file.Path path) {
-        try {
-            Files.deleteIfExists(path);
-        } catch (Exception e) {
-            // best effort; do not fail request on temp cleanup
-            LOG.debugf("Failed to delete temp file %s: %s", path, e.getMessage());
-        }
-    }
 }
-
-

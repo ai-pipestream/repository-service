@@ -24,6 +24,11 @@ pipestreamProtos {
             gitRef = "main"
             gitSubdir = "repo"
         }
+        register("admin") {
+            gitRepo = "https://github.com/ai-pipestream/pipestream-protos.git"
+            gitRef = "main"
+            gitSubdir = "admin"
+        }
     }
 }
 
@@ -41,7 +46,8 @@ dependencies {
     implementation 'io.quarkus:quarkus-rest'
     implementation 'io.quarkus:quarkus-rest-jackson'
     implementation 'io.grpc:grpc-services'
-    implementation 'io.quarkus:quarkus-hibernate-orm-panache'
+    implementation 'io.quarkus:quarkus-hibernate-reactive-panache'
+    implementation 'io.quarkus:quarkus-reactive-pg-client'
     implementation 'io.quarkus:quarkus-jdbc-postgresql'
     implementation 'io.quarkus:quarkus-flyway'
     implementation 'io.quarkus:quarkus-smallrye-health'
@@ -51,12 +57,12 @@ dependencies {
     // S3 client (MinIO/AWS)
     implementation 'io.quarkiverse.amazonservices:quarkus-amazon-s3'
     implementation 'software.amazon.awssdk:s3-transfer-manager'
-    // Required HTTP client for AWS SDK (Quarkus Amazon Services requires this)
+    // Required HTTP clients for AWS SDK (async uses Netty, sync uses URL connection)
     implementation libs.aws.sdk.netty.nio
 
     // Kafka and messaging
     implementation 'io.quarkus:quarkus-messaging-kafka'
-    implementation libs.apicurio.registry.protobuf.serde
+    implementation 'ai.pipestream:quarkus-apicurio-registry-protobuf'
 
     // Service discovery and registration
     implementation 'io.quarkus:quarkus-smallrye-stork'
@@ -103,6 +109,9 @@ java {
 test {
     maxHeapSize = "10g"
     systemProperty "java.util.logging.manager", "org.jboss.logmanager.LogManager"
+
+    // Required for JDK 24+ with jboss-threads
+    jvmArgs '--add-opens', 'java.base/java.lang=ALL-UNNAMED'
 }
 
 compileJava {

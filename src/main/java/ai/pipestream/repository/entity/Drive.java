@@ -1,20 +1,22 @@
 package ai.pipestream.repository.entity;
 
-import io.quarkus.hibernate.orm.panache.PanacheEntity;
+import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
 import jakarta.persistence.*;
+
 import java.time.Instant;
 
 /**
- * Entity representing a drive (storage location) in the repository.
- * A drive is a logical container for nodes (documents).
- * 
- * Design reference: docs/new-design/00-overview.md
+ * Entity representing a logical drive (container for nodes).
  */
 @Entity
 @Table(name = "drives")
-public class Drive extends PanacheEntity {
+public class Drive extends PanacheEntityBase {
 
-    @Column(nullable = false, unique = true)
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    public Long id;
+
+    @Column(name = "drive_id", nullable = false, unique = true)
     public String driveId;
 
     @Column(nullable = false)
@@ -23,15 +25,15 @@ public class Drive extends PanacheEntity {
     @Column(columnDefinition = "TEXT")
     public String description;
 
-    @Column(nullable = false)
+    @Column(name = "s3_bucket", nullable = false)
     public String s3Bucket;
 
-    @Column
+    @Column(name = "s3_prefix")
     public String s3Prefix;
 
-    @Column(nullable = false)
+    @Column(name = "created_at", nullable = false)
     public Instant createdAt;
 
-    @Column(nullable = false)
+    @Column(name = "updated_at", nullable = false)
     public Instant updatedAt;
 }

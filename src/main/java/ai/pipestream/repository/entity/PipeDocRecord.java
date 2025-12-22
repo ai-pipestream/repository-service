@@ -1,55 +1,65 @@
 package ai.pipestream.repository.entity;
 
-import io.quarkus.hibernate.orm.panache.PanacheEntity;
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Lob;
-import jakarta.persistence.Table;
+import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
+import jakarta.persistence.*;
 
 import java.time.Instant;
 
 /**
- * Persisted PipeDoc-for-parsing record.
+ * Persisted PipeDoc metadata record.
  *
  * Phase 1: created after raw HTTP upload is committed to S3.
- * Stores the serialized PipeDoc protobuf and the S3 reference used for hydration.
+ * Stores S3 reference and metadata for the document.
+ * The actual PipeDoc protobuf is stored in S3, not in the database.
  */
 @Entity
 @Table(name = "pipedocs")
-public class PipeDocRecord extends PanacheEntity {
+public class PipeDocRecord extends PanacheEntityBase {
 
-    @Column(nullable = false, unique = true)
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    public Long id;
+
+    @Column(name = "doc_id", nullable = false, unique = true)
     public String docId;
+
+    @Column(name = "account_id", nullable = false)
+    public String accountId;
+
+    @Column(name = "datasource_id", nullable = false)
+    public String datasourceId;
+
+    @Column(name = "connector_id")
+    public String connectorId;
 
     @Column(nullable = false)
     public String checksum;
 
-    @Column(nullable = false)
+    @Column(name = "drive_name", nullable = false)
     public String driveName;
 
-    @Column(nullable = false, length = 1024)
+    @Column(name = "object_key", nullable = false, length = 1024)
     public String objectKey;
 
-    @Column
+    @Column(name = "pipedoc_object_key", nullable = false, length = 1024)
+    public String pipedocObjectKey;
+
+    @Column(name = "version_id")
     public String versionId;
 
-    @Column
+    @Column(nullable = false)
     public String etag;
 
-    @Column(nullable = false)
+    @Column(name = "size_bytes", nullable = false)
     public Long sizeBytes;
 
-    @Column
+    @Column(name = "content_type")
     public String contentType;
 
-    @Column
+    @Column(nullable = false)
     public String filename;
 
-    @Lob
-    @Column(nullable = false, columnDefinition = "LONGBLOB")
-    public byte[] pipedocBytes;
-
-    @Column(nullable = false)
+    @Column(name = "created_at", nullable = false)
     public Instant createdAt;
 }
 

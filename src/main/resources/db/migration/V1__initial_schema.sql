@@ -1,8 +1,7 @@
 -- Initial schema for Repository Service
 
--- Documents table
 CREATE TABLE documents (
-    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     document_id VARCHAR(255) NOT NULL UNIQUE,
     title VARCHAR(500) NOT NULL,
     content TEXT,
@@ -11,29 +10,27 @@ CREATE TABLE documents (
     storage_location VARCHAR(1000) NOT NULL,
     checksum VARCHAR(64) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     version INT NOT NULL DEFAULT 1,
-    status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE',
-    INDEX idx_document_id (document_id),
-    INDEX idx_status (status),
-    INDEX idx_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE'
+);
+CREATE INDEX idx_document_id ON documents (document_id);
+CREATE INDEX idx_status ON documents (status);
+CREATE INDEX idx_created_at ON documents (created_at);
 
--- Document metadata table
 CREATE TABLE document_metadata (
-    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     document_id BIGINT NOT NULL,
     metadata_key VARCHAR(255) NOT NULL,
     metadata_value TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
-    INDEX idx_document_metadata (document_id, metadata_key),
-    INDEX idx_metadata_key (metadata_key)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_document_metadata ON document_metadata (document_id, metadata_key);
+CREATE INDEX idx_metadata_key ON document_metadata (metadata_key);
 
--- Document versions table
 CREATE TABLE document_versions (
-    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     document_id BIGINT NOT NULL,
     version_number INT NOT NULL,
     storage_location VARCHAR(1000) NOT NULL,
@@ -43,7 +40,7 @@ CREATE TABLE document_versions (
     created_by VARCHAR(255) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
-    UNIQUE KEY unique_document_version (document_id, version_number),
-    INDEX idx_document_versions (document_id, version_number),
-    INDEX idx_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    CONSTRAINT unique_document_version UNIQUE (document_id, version_number)
+);
+CREATE INDEX idx_document_versions ON document_versions (document_id, version_number);
+CREATE INDEX idx_versions_created_at ON document_versions (created_at);

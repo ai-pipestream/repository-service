@@ -1,6 +1,7 @@
 package ai.pipestream.repository.s3;
 
 import io.smallrye.config.ConfigMapping;
+import io.smallrye.config.WithDefault;
 
 /**
  * Minimal S3 configuration for Phase 1 HTTP upload.
@@ -23,15 +24,13 @@ public interface S3Config {
     /**
      * Whether to use path-style access (required for most MinIO setups).
      */
-    default boolean pathStyleAccess() {
-        return true;
-    }
+    @WithDefault("true")
+    boolean pathStyleAccess();
 
     /**
      * Optional object key prefix.
      */
-    default String keyPrefix() {
-        return "uploads";
-    }
+    @WithDefault("uploads")
+    String keyPrefix();
 }
 
