@@ -14,7 +14,7 @@ def pipestreamBomVersion = findProperty('pipestreamBomVersion') ?: '0.7.10'
 scmVersion {
     tag {
         prefix = 'v'
-        initialVersion = '0.0.1'
+        initialVersion { config, position -> '0.0.1' }
     }
     checks {
         uncommittedChanges = false

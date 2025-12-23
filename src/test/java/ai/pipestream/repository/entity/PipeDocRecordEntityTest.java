@@ -41,7 +41,7 @@ public class PipeDocRecordEntityTest {
         record.createdAt = Instant.now();
 
         // Persist the record
-        record::persist).await().indefinitely();;
+        record.persist().await().indefinitely();;
 
         // Verify it was saved
         assertThat(record.id, is(notNullValue()));
@@ -81,7 +81,7 @@ public class PipeDocRecordEntityTest {
         record1.contentType = "text/plain";
         record1.filename = "unique-document.txt";
         record1.createdAt = Instant.now();
-        record1::persist).await().indefinitely();;
+        record1.persist().await().indefinitely();;
 
         // Try to create record with same docId - should fail
         PipeDocRecord record2 = new PipeDocRecord();
@@ -99,7 +99,7 @@ public class PipeDocRecordEntityTest {
         record2.createdAt = Instant.now();
 
         try {
-            record2::persist).await().indefinitely();;
+            record2.persist().await().indefinitely();;
             assertThat("Should have failed due to unique constraint", false);
         } catch (Exception e) {
             LOG.infof("Correctly caught unique constraint violation: %s", e.getMessage());
@@ -132,7 +132,7 @@ public class PipeDocRecordEntityTest {
         record.contentType = "application/pdf";
         record.filename = "document.pdf";
         record.createdAt = Instant.now();
-        record::persist).await().indefinitely();;
+        record.persist().await().indefinitely();;
 
         // Verify S3 reference is stored correctly
         PipeDocRecord retrieved = PipeDocRecord.<PipeDocRecord>findById(record.id).await().indefinitely();
@@ -163,7 +163,7 @@ public class PipeDocRecordEntityTest {
         record1.contentType = "text/plain";
         record1.filename = "query-document-1.txt";
         record1.createdAt = Instant.now();
-        record1::persist).await().indefinitely();;
+        record1.persist().await().indefinitely();;
 
         PipeDocRecord record2 = new PipeDocRecord();
         record2.docId = "query-doc-2-" + System.currentTimeMillis();
@@ -178,7 +178,7 @@ public class PipeDocRecordEntityTest {
         record2.contentType = "text/plain";
         record2.filename = "query-document-2.txt";
         record2.createdAt = Instant.now();
-        record2::persist).await().indefinitely();;
+        record2.persist().await().indefinitely();;
 
         // Test find by driveName
         long driveRecordsCount = PipeDocRecord.count("driveName", "query-drive-1").await().indefinitely();
