@@ -107,6 +107,8 @@ dependencies {
     // Testing
     testImplementation 'io.quarkus:quarkus-junit5'
     testImplementation 'io.quarkus:quarkus-junit5-mockito'
+    testImplementation 'io.quarkus:quarkus-test-vertx'
+    testImplementation 'io.quarkus:quarkus-test-hibernate-reactive-panache'
     testImplementation 'io.rest-assured:rest-assured'
     testImplementation 'org.testcontainers:postgresql'
     runtimeOnly libs.quarkus.logging.manager

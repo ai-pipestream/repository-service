@@ -1,11 +1,12 @@
 package ai.pipestream.repository.entity;
-import io.quarkus.hibernate.reactive.panache.Panache;
-
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.hibernate.reactive.panache.TransactionalUniAsserter;
+import io.quarkus.test.vertx.RunOnVertxContext;
 import org.jboss.logging.Logger;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -22,7 +23,8 @@ public class DriveEntityTest {
     private static final Logger LOG = Logger.getLogger(DriveEntityTest.class);
 
     @Test
-    void testCreateAndFindDrive() {
+    @RunOnVertxContext
+    void testCreateAndFindDrive(TransactionalUniAsserter asserter) {
         LOG.info("Testing Drive entity CRUD operations");
 
         // Create a new drive
@@ -35,31 +37,24 @@ public class DriveEntityTest {
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
 
-        // Persist the drive
-        drive.persist().await().indefinitely();;
+        asserter.execute(() -> drive.persist());
 
-        // Verify it was saved
-        assertThat(drive.id, is(notNullValue()));
+        asserter.assertThat(() -> Drive.<Drive>findById(drive.id), foundById -> {
+            assertThat(foundById, is(notNullValue()));
+            assertThat(foundById.driveId, is(drive.driveId));
+            assertThat(foundById.name, is("Test Drive"));
+            assertThat(foundById.s3Bucket, is(drive.s3Bucket));
+        });
 
-        LOG.infof("Created drive: id=%d, driveId=%s", drive.id, drive.driveId);
-
-        // Test findById
-        Drive foundById = Drive.<Drive>findById(drive.id).await().indefinitely();
-        assertThat(foundById, is(notNullValue()));
-        assertThat(foundById.driveId, is(drive.driveId));
-        assertThat(foundById.name, is("Test Drive"));
-        assertThat(foundById.s3Bucket, is(drive.s3Bucket));
-
-        // Test find by driveId
-        Drive foundByDriveId = Drive.<Drive>find("driveId", drive.driveId).firstResult().await().indefinitely();
-        assertThat(foundByDriveId, is(notNullValue()));
-        assertThat(foundByDriveId.id, is(drive.id));
-
-        LOG.infof("All Drive lookups working correctly");
+        asserter.assertThat(() -> Drive.<Drive>find("driveId", drive.driveId).firstResult(), foundByDriveId -> {
+            assertThat(foundByDriveId, is(notNullValue()));
+            assertThat(foundByDriveId.id, is(drive.id));
+        });
     }
 
     @Test
-    void testDriveUniqueConstraints() {
+    @RunOnVertxContext
+    void testDriveUniqueConstraints(TransactionalUniAsserter asserter) {
         LOG.info("Testing Drive unique constraints");
 
         // Create first drive
@@ -69,7 +64,7 @@ public class DriveEntityTest {
         drive1.s3Bucket = "unique-bucket-" + System.currentTimeMillis();
         drive1.createdAt = Instant.now();
         drive1.updatedAt = Instant.now();
-        drive1.persist().await().indefinitely();;
+        asserter.execute(() -> drive1.persist());
 
         // Try to create drive with same driveId - should fail
         Drive drive2 = new Drive();
@@ -79,23 +74,20 @@ public class DriveEntityTest {
         drive2.createdAt = Instant.now();
         drive2.updatedAt = Instant.now();
 
-        try {
-            drive2.persist().await().indefinitely();;
-            assertThat("Should have failed due to unique constraint", false);
-        } catch (Exception e) {
-            // Expected - unique constraint violation
+        asserter.assertFailedWith(drive2::persist, e -> {
             LOG.infof("Correctly caught unique constraint violation: %s", e.getMessage());
             assertThat(e.getMessage(), anyOf(
-                containsString("duplicate"),
-                containsString("unique"),
-                containsString("constraint"),
-                is(nullValue())
+                    containsString("duplicate"),
+                    containsString("unique"),
+                    containsString("constraint"),
+                    is(nullValue())
             ));
-        }
+        });
     }
 
     @Test
-    void testDriveUpdateOperations() {
+    @RunOnVertxContext
+    void testDriveUpdateOperations(TransactionalUniAsserter asserter) {
         LOG.info("Testing Drive update operations");
 
         // Create a drive
@@ -106,32 +98,33 @@ public class DriveEntityTest {
         drive.s3Bucket = "update-bucket-" + System.currentTimeMillis();
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();;
+        asserter.execute(() -> drive.persist());
 
-        Long originalId = drive.id;
         Instant originalCreated = drive.createdAt;
 
-        // Update the drive
         drive.name = "Updated Name";
         drive.description = "Updated description";
         drive.s3Prefix = "updated-prefix/";
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();;
 
-        // Verify updates
-        Drive updatedDrive = Drive.<Drive>findById(drive.id).await().indefinitely();
-        assertThat("ID should be unchanged", updatedDrive.id, is(originalId));
-        assertThat("Name should be updated", updatedDrive.name, is("Updated Name"));
-        assertThat("Description should be updated", updatedDrive.description, is("Updated description"));
-        assertThat("S3 prefix should be updated", updatedDrive.s3Prefix, is("updated-prefix/"));
-        assertThat("Created timestamp unchanged", updatedDrive.createdAt, is(originalCreated));
-        assertThat("Updated timestamp changed", updatedDrive.updatedAt, is(greaterThanOrEqualTo(originalCreated)));
+        asserter.execute(() -> Drive.update(
+                "name = ?1, description = ?2, s3Prefix = ?3, updatedAt = ?4 where id = ?5",
+                drive.name, drive.description, drive.s3Prefix, drive.updatedAt, drive.id));
 
-        LOG.infof("Drive update operations working correctly");
+        asserter.assertThat(() -> Drive.<Drive>findById(drive.id), updatedDrive -> {
+            assertThat(updatedDrive, is(notNullValue()));
+            assertThat("Name should be updated", updatedDrive.name, is("Updated Name"));
+            assertThat("Description should be updated", updatedDrive.description, is("Updated description"));
+            assertThat("S3 prefix should be updated", updatedDrive.s3Prefix, is("updated-prefix/"));
+            assertThat("Created timestamp unchanged", updatedDrive.createdAt.truncatedTo(ChronoUnit.MICROS),
+                    is(originalCreated.truncatedTo(ChronoUnit.MICROS)));
+            assertThat("Updated timestamp changed", updatedDrive.updatedAt, is(greaterThanOrEqualTo(originalCreated)));
+        });
     }
 
     @Test
-    void testDriveDeleteOperations() {
+    @RunOnVertxContext
+    void testDriveDeleteOperations(TransactionalUniAsserter asserter) {
         LOG.info("Testing Drive delete operations");
 
         // Create a drive
@@ -141,24 +134,16 @@ public class DriveEntityTest {
         drive.s3Bucket = "delete-bucket-" + System.currentTimeMillis();
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();;
+        asserter.execute(() -> drive.persist());
 
-        Long driveId = drive.id;
-
-        // Verify it exists
-        assertThat(Drive.<Drive>findById(driveId).await().indefinitely(), is(notNullValue()));
-
-        // Delete the drive
-        drive.delete().await().indefinitely();
-
-        // Verify it's gone
-        assertThat(Drive.<Drive>findById(driveId).await().indefinitely(), is(nullValue()));
-
-        LOG.infof("Drive delete operations working correctly");
+        asserter.assertNotNull(() -> Drive.<Drive>findById(drive.id));
+        asserter.execute(() -> Drive.deleteById(drive.id));
+        asserter.assertNull(() -> Drive.<Drive>findById(drive.id));
     }
 
     @Test
-    void testDriveListOperations() {
+    @RunOnVertxContext
+    void testDriveListOperations(TransactionalUniAsserter asserter) {
         LOG.info("Testing Drive list operations");
 
         // Create multiple drives
@@ -168,7 +153,7 @@ public class DriveEntityTest {
         drive1.s3Bucket = "list-bucket-1-" + System.currentTimeMillis();
         drive1.createdAt = Instant.now();
         drive1.updatedAt = Instant.now();
-        drive1.persist().await().indefinitely();;
+        asserter.execute(() -> drive1.persist());
 
         Drive drive2 = new Drive();
         drive2.driveId = "list-drive-2-" + System.currentTimeMillis();
@@ -176,20 +161,15 @@ public class DriveEntityTest {
         drive2.s3Bucket = "list-bucket-2-" + System.currentTimeMillis();
         drive2.createdAt = Instant.now();
         drive2.updatedAt = Instant.now();
-        drive2.persist().await().indefinitely();;
+        asserter.execute(() -> drive2.persist());
 
-        // Test count
-        long totalDrives = Drive.count().await().indefinitely();
-        assertThat("Should have at least 2 drives", totalDrives, is(greaterThanOrEqualTo(2L)));
+        asserter.assertThat(() -> Drive.count(), totalDrives ->
+                assertThat("Should have at least 2 drives", totalDrives, is(greaterThanOrEqualTo(2L))));
 
-        // Test list all
-        List<Drive> allDrives = Drive.<Drive>listAll().await().indefinitely();
-        assertThat("Should contain our drives", allDrives.size(), is(greaterThanOrEqualTo(2)));
+        asserter.assertThat(() -> Drive.<Drive>listAll(), allDrives ->
+                assertThat("Should contain our drives", allDrives.size(), is(greaterThanOrEqualTo(2))));
 
-        // Test find with conditions
-        List<Drive> drivesWithName = Drive.<Drive>list("name like ?1", "List Drive%").await().indefinitely();
-        assertThat("Should find drives with matching names", drivesWithName.size(), is(greaterThanOrEqualTo(2)));
-
-        LOG.infof("Drive list operations working correctly");
+        asserter.assertThat(() -> Drive.<Drive>list("name like ?1", "List Drive%"), drivesWithName ->
+                assertThat("Should find drives with matching names", drivesWithName.size(), is(greaterThanOrEqualTo(2))));
     }
 }

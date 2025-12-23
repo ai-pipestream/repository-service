@@ -1,12 +1,12 @@
 package ai.pipestream.repository.entity;
-import io.quarkus.hibernate.reactive.panache.Panache;
-
-import io.quarkus.hibernate.reactive.panache.Panache;
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.hibernate.reactive.panache.TransactionalUniAsserter;
+import io.quarkus.test.vertx.RunOnVertxContext;
 import org.jboss.logging.Logger;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -22,7 +22,8 @@ public class DocumentEntityTest {
     private static final Logger LOG = Logger.getLogger(DocumentEntityTest.class);
 
     @Test
-    void testCreateAndFindDocument() {
+    @RunOnVertxContext
+    void testCreateAndFindDocument(TransactionalUniAsserter asserter) {
         LOG.info("Testing Document entity CRUD operations");
 
         // Create a new document
@@ -39,31 +40,25 @@ public class DocumentEntityTest {
         document.version = 1;
         document.status = "ACTIVE";
 
-        // Persist the document
-        Panache.withTransaction(document::persist).await().indefinitely();
+        asserter.execute(() -> document.persist());
 
-        // Verify it was saved
-        assertThat(document.id, is(notNullValue()));
+        // Verify it was saved + lookups work
+        asserter.assertThat(() -> Document.<Document>findById(document.id), foundById -> {
+            assertThat(foundById, is(notNullValue()));
+            assertThat(foundById.documentId, is(document.documentId));
+            assertThat(foundById.title, is("Test Document"));
+            assertThat(foundById.status, is("ACTIVE"));
+        });
 
-        LOG.infof("Created document: id=%d, documentId=%s", document.id, document.documentId);
-
-        // Test findById
-        Document foundById = Document.<Document>findById(document.id).await().indefinitely();
-        assertThat(foundById, is(notNullValue()));
-        assertThat(foundById.documentId, is(document.documentId));
-        assertThat(foundById.title, is("Test Document"));
-        assertThat(foundById.status, is("ACTIVE"));
-
-        // Test find by documentId
-        Document foundByDocumentId = Document.<Document>find("documentId", document.documentId).firstResult().await().indefinitely();
-        assertThat(foundByDocumentId, is(notNullValue()));
-        assertThat(foundByDocumentId.id, is(document.id));
-
-        LOG.infof("All Document lookups working correctly");
+        asserter.assertThat(() -> Document.<Document>find("documentId", document.documentId).firstResult(), foundByDocumentId -> {
+            assertThat(foundByDocumentId, is(notNullValue()));
+            assertThat(foundByDocumentId.id, is(document.id));
+        });
     }
 
     @Test
-    void testDocumentUniqueConstraints() {
+    @RunOnVertxContext
+    void testDocumentUniqueConstraints(TransactionalUniAsserter asserter) {
         LOG.info("Testing Document unique constraints");
 
         // Create first document
@@ -78,7 +73,7 @@ public class DocumentEntityTest {
         doc1.updatedAt = Instant.now();
         doc1.version = 1;
         doc1.status = "ACTIVE";
-        doc1.persist().await().indefinitely();;
+        asserter.execute(() -> doc1.persist());
 
         // Try to create document with same documentId - should fail
         Document doc2 = new Document();
@@ -93,22 +88,20 @@ public class DocumentEntityTest {
         doc2.version = 1;
         doc2.status = "ACTIVE";
 
-        try {
-            doc2.persist().await().indefinitely();;
-            assertThat("Should have failed due to unique constraint", false);
-        } catch (Exception e) {
+        asserter.assertFailedWith(doc2::persist, e -> {
             LOG.infof("Correctly caught unique constraint violation: %s", e.getMessage());
             assertThat(e.getMessage(), anyOf(
-                containsString("duplicate"),
-                containsString("unique"),
-                containsString("constraint"),
-                is(nullValue())
+                    containsString("duplicate"),
+                    containsString("unique"),
+                    containsString("constraint"),
+                    is(nullValue())
             ));
-        }
+        });
     }
 
     @Test
-    void testDocumentUpdateOperations() {
+    @RunOnVertxContext
+    void testDocumentUpdateOperations(TransactionalUniAsserter asserter) {
         LOG.info("Testing Document update operations");
 
         // Create a document
@@ -124,34 +117,37 @@ public class DocumentEntityTest {
         document.updatedAt = Instant.now();
         document.version = 1;
         document.status = "ACTIVE";
-        document.persist().await().indefinitely();;
 
-        Long originalId = document.id;
+        asserter.execute(() -> document.persist());
+
         Instant originalCreated = document.createdAt;
 
-        // Update the document
+        // Update via JPQL update (avoid relying on attached entity state across transactions)
         document.title = "Updated Title";
         document.content = "Updated content";
         document.contentSize = 150L;
         document.version = 2;
         document.updatedAt = Instant.now();
-        document.persist().await().indefinitely();;
 
-        // Verify updates
-        Document updatedDoc = Document.<Document>findById(document.id).await().indefinitely();
-        assertThat("ID should be unchanged", updatedDoc.id, is(originalId));
-        assertThat("Title should be updated", updatedDoc.title, is("Updated Title"));
-        assertThat("Content should be updated", updatedDoc.content, is("Updated content"));
-        assertThat("Size should be updated", updatedDoc.contentSize, is(150L));
-        assertThat("Version should be updated", updatedDoc.version, is(2));
-        assertThat("Created timestamp unchanged", updatedDoc.createdAt, is(originalCreated));
-        assertThat("Updated timestamp changed", updatedDoc.updatedAt, is(greaterThanOrEqualTo(originalCreated)));
+        asserter.execute(() -> Document.update(
+                "title = ?1, content = ?2, contentSize = ?3, version = ?4, updatedAt = ?5 where id = ?6",
+                document.title, document.content, document.contentSize, document.version, document.updatedAt, document.id));
 
-        LOG.infof("Document update operations working correctly");
+        asserter.assertThat(() -> Document.<Document>findById(document.id), updatedDoc -> {
+            assertThat(updatedDoc, is(notNullValue()));
+            assertThat("Title should be updated", updatedDoc.title, is("Updated Title"));
+            assertThat("Content should be updated", updatedDoc.content, is("Updated content"));
+            assertThat("Size should be updated", updatedDoc.contentSize, is(150L));
+            assertThat("Version should be updated", updatedDoc.version, is(2));
+            assertThat("Created timestamp unchanged", updatedDoc.createdAt.truncatedTo(ChronoUnit.MICROS),
+                    is(originalCreated.truncatedTo(ChronoUnit.MICROS)));
+            assertThat("Updated timestamp changed", updatedDoc.updatedAt, is(greaterThanOrEqualTo(originalCreated)));
+        });
     }
 
     @Test
-    void testDocumentStatusQueries() {
+    @RunOnVertxContext
+    void testDocumentStatusQueries(TransactionalUniAsserter asserter) {
         LOG.info("Testing Document status-based queries");
 
         // Create documents with different statuses
@@ -166,7 +162,7 @@ public class DocumentEntityTest {
         activeDoc.updatedAt = Instant.now();
         activeDoc.version = 1;
         activeDoc.status = "ACTIVE";
-        activeDoc.persist().await().indefinitely();;
+        asserter.execute(() -> activeDoc.persist());
 
         Document inactiveDoc = new Document();
         inactiveDoc.documentId = "inactive-doc-" + System.currentTimeMillis();
@@ -179,24 +175,20 @@ public class DocumentEntityTest {
         inactiveDoc.updatedAt = Instant.now();
         inactiveDoc.version = 1;
         inactiveDoc.status = "DELETED";
-        inactiveDoc.persist().await().indefinitely();;
+        asserter.execute(() -> inactiveDoc.persist());
 
-        // Test find by status
-        List<Document> activeDocuments = Document.<Document>list("status", "ACTIVE").await().indefinitely();
-        assertThat("Should find active documents", activeDocuments.size(), is(greaterThanOrEqualTo(1)));
+        asserter.assertThat(() -> Document.<Document>list("status", "ACTIVE"), activeDocuments -> {
+            assertThat("Should find active documents", activeDocuments.size(), is(greaterThanOrEqualTo(1)));
+            boolean foundActive = activeDocuments.stream()
+                    .anyMatch(doc -> doc.documentId.equals(activeDoc.documentId));
+            assertThat("Should find our active document", foundActive, is(true));
+        });
 
-        List<Document> inactiveDocuments = Document.<Document>list("status", "DELETED").await().indefinitely();
-        assertThat("Should find inactive documents", inactiveDocuments.size(), is(greaterThanOrEqualTo(1)));
-
-        // Verify our specific documents are in the results
-        boolean foundActive = activeDocuments.stream()
-            .anyMatch(doc -> doc.documentId.equals(activeDoc.documentId));
-        boolean foundInactive = inactiveDocuments.stream()
-            .anyMatch(doc -> doc.documentId.equals(inactiveDoc.documentId));
-
-        assertThat("Should find our active document", foundActive, is(true));
-        assertThat("Should find our inactive document", foundInactive, is(true));
-
-        LOG.infof("Document status queries working correctly");
+        asserter.assertThat(() -> Document.<Document>list("status", "DELETED"), inactiveDocuments -> {
+            assertThat("Should find inactive documents", inactiveDocuments.size(), is(greaterThanOrEqualTo(1)));
+            boolean foundInactive = inactiveDocuments.stream()
+                    .anyMatch(doc -> doc.documentId.equals(inactiveDoc.documentId));
+            assertThat("Should find our inactive document", foundInactive, is(true));
+        });
     }
 }

@@ -8,6 +8,7 @@ import io.grpc.ManagedChannelBuilder;
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.Test;
+import org.eclipse.microprofile.config.ConfigProvider;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -18,13 +19,17 @@ public class WireMockSanityTest {
 
     @Test
     void canCallAccountServiceOnWireMock() {
-        // WireMockTestResource sets these properties
-        String host = System.getProperty("quarkus.grpc.clients.account-service.host");
-        String port = System.getProperty("quarkus.grpc.clients.account-service.port");
+        // WireMockTestResource sets these properties (as Quarkus config overrides)
+        String host = ConfigProvider.getConfig()
+                .getOptionalValue("quarkus.grpc.clients.account-service.host", String.class)
+                .orElse(null);
+        Integer port = ConfigProvider.getConfig()
+                .getOptionalValue("quarkus.grpc.clients.account-service.port", Integer.class)
+                .orElse(null);
         
         System.out.println("Connecting to WireMock at " + host + ":" + port);
 
-        ManagedChannel channel = ManagedChannelBuilder.forAddress(host, Integer.parseInt(port))
+        ManagedChannel channel = ManagedChannelBuilder.forAddress(host, port)
                 .usePlaintext()
                 .build();
 

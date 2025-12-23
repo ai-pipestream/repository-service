@@ -1,7 +1,7 @@
 package ai.pipestream.repository.entity;
-import io.quarkus.hibernate.reactive.panache.Panache;
-
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.hibernate.reactive.panache.TransactionalUniAsserter;
+import io.quarkus.test.vertx.RunOnVertxContext;
 import org.jboss.logging.Logger;
 import org.junit.jupiter.api.Test;
 
@@ -21,7 +21,8 @@ public class PipeDocRecordEntityTest {
     private static final Logger LOG = Logger.getLogger(PipeDocRecordEntityTest.class);
 
     @Test
-    void testCreateAndFindPipeDocRecord() {
+    @RunOnVertxContext
+    void testCreateAndFindPipeDocRecord(TransactionalUniAsserter asserter) {
         LOG.info("Testing PipeDocRecord entity CRUD operations");
 
         // Create a new PipeDocRecord (metadata only, no pipedoc bytes in DB)
@@ -41,30 +42,24 @@ public class PipeDocRecordEntityTest {
         record.createdAt = Instant.now();
 
         // Persist the record
-        record.persist().await().indefinitely();;
+        asserter.execute(() -> record.persist());
 
-        // Verify it was saved
-        assertThat(record.id, is(notNullValue()));
+        asserter.assertThat(() -> PipeDocRecord.<PipeDocRecord>findById(record.id), foundById -> {
+            assertThat(foundById, is(notNullValue()));
+            assertThat(foundById.docId, is(record.docId));
+            assertThat(foundById.checksum, is("checksum123"));
+            assertThat(foundById.sizeBytes, is(1024L));
+        });
 
-        LOG.infof("Created PipeDocRecord: id=%d, docId=%s", record.id, record.docId);
-
-        // Test findById
-        PipeDocRecord foundById = PipeDocRecord.<PipeDocRecord>findById(record.id).await().indefinitely();
-        assertThat(foundById, is(notNullValue()));
-        assertThat(foundById.docId, is(record.docId));
-        assertThat(foundById.checksum, is("checksum123"));
-        assertThat(foundById.sizeBytes, is(1024L));
-
-        // Test find by docId
-        PipeDocRecord foundByDocId = PipeDocRecord.<PipeDocRecord>find("docId", record.docId).firstResult().await().indefinitely();
-        assertThat(foundByDocId, is(notNullValue()));
-        assertThat(foundByDocId.id, is(record.id));
-
-        LOG.infof("All PipeDocRecord lookups working correctly");
+        asserter.assertThat(() -> PipeDocRecord.<PipeDocRecord>find("docId", record.docId).firstResult(), foundByDocId -> {
+            assertThat(foundByDocId, is(notNullValue()));
+            assertThat(foundByDocId.id, is(record.id));
+        });
     }
 
     @Test
-    void testPipeDocRecordUniqueConstraints() {
+    @RunOnVertxContext
+    void testPipeDocRecordUniqueConstraints(TransactionalUniAsserter asserter) {
         LOG.info("Testing PipeDocRecord unique constraints");
 
         // Create first record
@@ -81,7 +76,7 @@ public class PipeDocRecordEntityTest {
         record1.contentType = "text/plain";
         record1.filename = "unique-document.txt";
         record1.createdAt = Instant.now();
-        record1.persist().await().indefinitely();;
+        asserter.execute(() -> record1.persist());
 
         // Try to create record with same docId - should fail
         PipeDocRecord record2 = new PipeDocRecord();
@@ -98,23 +93,20 @@ public class PipeDocRecordEntityTest {
         record2.filename = "different-document.txt";
         record2.createdAt = Instant.now();
 
-        try {
-            record2.persist().await().indefinitely();;
-            assertThat("Should have failed due to unique constraint", false);
-        } catch (Exception e) {
+        asserter.assertFailedWith(record2::persist, e -> {
             LOG.infof("Correctly caught unique constraint violation: %s", e.getMessage());
-            // In reactive, the exception might be wrapped or different
             assertThat(e.getMessage(), anyOf(
-                containsString("duplicate"),
-                containsString("unique"),
-                containsString("constraint"),
-                is(nullValue()) // Sometimes the error is only on flush/commit
+                    containsString("duplicate"),
+                    containsString("unique"),
+                    containsString("constraint"),
+                    is(nullValue())
             ));
-        }
+        });
     }
 
     @Test
-    void testPipeDocRecordS3Reference() {
+    @RunOnVertxContext
+    void testPipeDocRecordS3Reference(TransactionalUniAsserter asserter) {
         LOG.info("Testing PipeDocRecord S3 reference storage");
 
         // Create record with S3 reference
@@ -132,21 +124,20 @@ public class PipeDocRecordEntityTest {
         record.contentType = "application/pdf";
         record.filename = "document.pdf";
         record.createdAt = Instant.now();
-        record.persist().await().indefinitely();;
+        asserter.execute(() -> record.persist());
 
-        // Verify S3 reference is stored correctly
-        PipeDocRecord retrieved = PipeDocRecord.<PipeDocRecord>findById(record.id).await().indefinitely();
-        assertThat("Should store object key", retrieved.objectKey,
-            is("uploads/account-123/connector-456/doc-789/document.pdf"));
-        assertThat("Should store drive name", retrieved.driveName, is("customer-drive"));
-        assertThat("Should store version id", retrieved.versionId, is("v2-abc-def-123"));
-        assertThat("Should store etag", retrieved.etag, is("\"d41d8cd98f00b204e9800998ecf8427e\""));
-
-        LOG.infof("PipeDocRecord S3 reference storage working correctly");
+        asserter.assertThat(() -> PipeDocRecord.<PipeDocRecord>findById(record.id), retrieved -> {
+            assertThat("Should store object key", retrieved.objectKey,
+                    is("uploads/account-123/connector-456/doc-789/document.pdf"));
+            assertThat("Should store drive name", retrieved.driveName, is("customer-drive"));
+            assertThat("Should store version id", retrieved.versionId, is("v2-abc-def-123"));
+            assertThat("Should store etag", retrieved.etag, is("\"d41d8cd98f00b204e9800998ecf8427e\""));
+        });
     }
 
     @Test
-    void testPipeDocRecordQueries() {
+    @RunOnVertxContext
+    void testPipeDocRecordQueries(TransactionalUniAsserter asserter) {
         LOG.info("Testing PipeDocRecord query operations");
 
         // Create multiple records
@@ -163,7 +154,7 @@ public class PipeDocRecordEntityTest {
         record1.contentType = "text/plain";
         record1.filename = "query-document-1.txt";
         record1.createdAt = Instant.now();
-        record1.persist().await().indefinitely();;
+        asserter.execute(() -> record1.persist());
 
         PipeDocRecord record2 = new PipeDocRecord();
         record2.docId = "query-doc-2-" + System.currentTimeMillis();
@@ -178,21 +169,17 @@ public class PipeDocRecordEntityTest {
         record2.contentType = "text/plain";
         record2.filename = "query-document-2.txt";
         record2.createdAt = Instant.now();
-        record2.persist().await().indefinitely();;
+        asserter.execute(() -> record2.persist());
 
-        // Test find by driveName
-        long driveRecordsCount = PipeDocRecord.count("driveName", "query-drive-1").await().indefinitely();
-        assertThat("Should find records for drive", driveRecordsCount, is(greaterThanOrEqualTo(2L)));
+        asserter.assertThat(() -> PipeDocRecord.count("driveName", "query-drive-1"), driveRecordsCount ->
+                assertThat("Should find records for drive", driveRecordsCount, is(greaterThanOrEqualTo(2L))));
 
-        // Test find by checksum
-        PipeDocRecord foundByChecksum = PipeDocRecord.<PipeDocRecord>find("checksum", "query123").firstResult().await().indefinitely();
-        assertThat("Should find record by checksum", foundByChecksum, is(notNullValue()));
-        assertThat("Found record should match", foundByChecksum.docId, is(record1.docId));
+        asserter.assertThat(() -> PipeDocRecord.<PipeDocRecord>find("checksum", "query123").firstResult(), foundByChecksum -> {
+            assertThat("Should find record by checksum", foundByChecksum, is(notNullValue()));
+            assertThat("Found record should match", foundByChecksum.docId, is(record1.docId));
+        });
 
-        // Test size-based queries
-        long largeRecordsCount = PipeDocRecord.count("sizeBytes > ?1", 150L).await().indefinitely();
-        assertThat("Should find larger records", largeRecordsCount, is(greaterThanOrEqualTo(1L)));
-
-        LOG.infof("PipeDocRecord queries working correctly");
+        asserter.assertThat(() -> PipeDocRecord.count("sizeBytes > ?1", 150L), largeRecordsCount ->
+                assertThat("Should find larger records", largeRecordsCount, is(greaterThanOrEqualTo(1L))));
     }
 }

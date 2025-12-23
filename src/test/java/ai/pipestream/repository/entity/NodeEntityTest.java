@@ -1,7 +1,7 @@
 package ai.pipestream.repository.entity;
-import io.quarkus.hibernate.reactive.panache.Panache;
-
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.hibernate.reactive.panache.TransactionalUniAsserter;
+import io.quarkus.test.vertx.RunOnVertxContext;
 import org.jboss.logging.Logger;
 import org.junit.jupiter.api.Test;
 
@@ -21,7 +21,8 @@ public class NodeEntityTest {
     private static final Logger LOG = Logger.getLogger(NodeEntityTest.class);
 
     @Test
-    void testCreateAndFindNode() {
+    @RunOnVertxContext
+    void testCreateAndFindNode(TransactionalUniAsserter asserter) {
         LOG.info("Testing Node entity CRUD operations");
 
         // First create a drive for the node
@@ -31,7 +32,7 @@ public class NodeEntityTest {
         drive.s3Bucket = "node-test-bucket-" + System.currentTimeMillis();
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();;
+        asserter.execute(() -> drive.persist());
 
         // Create a new node
         Node node = new Node();
@@ -49,30 +50,24 @@ public class NodeEntityTest {
         node.updatedAt = Instant.now();
 
         // Persist the node
-        node.persist().await().indefinitely();;
+        asserter.execute(() -> node.persist());
 
-        // Verify it was saved
-        assertThat(node.id, is(notNullValue()));
+        asserter.assertThat(() -> Node.<Node>findById(node.id), foundById -> {
+            assertThat(foundById, is(notNullValue()));
+            assertThat(foundById.nodeId, is(node.nodeId));
+            assertThat(foundById.name, is("test-document.txt"));
+            assertThat(foundById.status, is("ACTIVE"));
+        });
 
-        LOG.infof("Created node: id=%d, nodeId=%s", node.id, node.nodeId);
-
-        // Test findById
-        Node foundById = Node.<Node>findById(node.id).await().indefinitely();
-        assertThat(foundById, is(notNullValue()));
-        assertThat(foundById.nodeId, is(node.nodeId));
-        assertThat(foundById.name, is("test-document.txt"));
-        assertThat(foundById.status, is("ACTIVE"));
-
-        // Test find by nodeId
-        Node foundByNodeId = Node.<Node>find("nodeId", node.nodeId).firstResult().await().indefinitely();
-        assertThat(foundByNodeId, is(notNullValue()));
-        assertThat(foundByNodeId.id, is(node.id));
-
-        LOG.infof("All Node lookups working correctly");
+        asserter.assertThat(() -> Node.<Node>find("nodeId", node.nodeId).firstResult(), foundByNodeId -> {
+            assertThat(foundByNodeId, is(notNullValue()));
+            assertThat(foundByNodeId.id, is(node.id));
+        });
     }
 
     @Test
-    void testNodeWithDocumentRelationship() {
+    @RunOnVertxContext
+    void testNodeWithDocumentRelationship(TransactionalUniAsserter asserter) {
         LOG.info("Testing Node with Document relationship");
 
         // Create drive and document first
@@ -82,7 +77,7 @@ public class NodeEntityTest {
         drive.s3Bucket = "relation-bucket-" + System.currentTimeMillis();
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();;
+        asserter.execute(() -> drive.persist());
 
         Document document = new Document();
         document.documentId = "relation-doc-" + System.currentTimeMillis();
@@ -95,7 +90,7 @@ public class NodeEntityTest {
         document.updatedAt = Instant.now();
         document.version = 1;
         document.status = "ACTIVE";
-        document.persist().await().indefinitely();;
+        asserter.execute(() -> document.persist());
 
         // Create node linked to both drive and document
         Node node = new Node();
@@ -108,25 +103,18 @@ public class NodeEntityTest {
         node.status = "ACTIVE";
         node.createdAt = Instant.now();
         node.updatedAt = Instant.now();
-        node.persist().await().indefinitely();;
+        asserter.execute(() -> node.persist());
 
-        // Verify relationships
-        assertThat(node.drive.id, is(drive.id));
-        assertThat(node.document.id, is(document.id));
+        asserter.assertThat(() -> Node.<Node>list("drive", drive), driveNodes ->
+                assertThat("Should find nodes for drive", driveNodes.size(), is(greaterThanOrEqualTo(1))));
 
-        // Test navigation from drive to nodes
-        List<Node> driveNodes = Node.<Node>list("drive", drive).await().indefinitely();
-        assertThat("Should find nodes for drive", driveNodes.size(), is(greaterThanOrEqualTo(1)));
-
-        // Test navigation from document to nodes
-        List<Node> documentNodes = Node.<Node>list("document", document).await().indefinitely();
-        assertThat("Should find nodes for document", documentNodes.size(), is(greaterThanOrEqualTo(1)));
-
-        LOG.infof("Node relationships working correctly");
+        asserter.assertThat(() -> Node.<Node>list("document", document), documentNodes ->
+                assertThat("Should find nodes for document", documentNodes.size(), is(greaterThanOrEqualTo(1))));
     }
 
     @Test
-    void testNodeUniqueConstraints() {
+    @RunOnVertxContext
+    void testNodeUniqueConstraints(TransactionalUniAsserter asserter) {
         LOG.info("Testing Node unique constraints");
 
         // Create drive first
@@ -136,7 +124,7 @@ public class NodeEntityTest {
         drive.s3Bucket = "constraint-bucket-" + System.currentTimeMillis();
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();;
+        asserter.execute(() -> drive.persist());
 
         // Create first node
         Node node1 = new Node();
@@ -146,7 +134,7 @@ public class NodeEntityTest {
         node1.status = "ACTIVE";
         node1.createdAt = Instant.now();
         node1.updatedAt = Instant.now();
-        node1.persist().await().indefinitely();;
+        asserter.execute(() -> node1.persist());
 
         // Try to create node with same nodeId - should fail
         Node node2 = new Node();
@@ -157,22 +145,20 @@ public class NodeEntityTest {
         node2.createdAt = Instant.now();
         node2.updatedAt = Instant.now();
 
-        try {
-            node2.persist().await().indefinitely();;
-            assertThat("Should have failed due to unique constraint", false);
-        } catch (Exception e) {
+        asserter.assertFailedWith(node2::persist, e -> {
             LOG.infof("Correctly caught unique constraint violation: %s", e.getMessage());
             assertThat(e.getMessage(), anyOf(
-                containsString("duplicate"),
-                containsString("unique"),
-                containsString("constraint"),
-                is(nullValue())
+                    containsString("duplicate"),
+                    containsString("unique"),
+                    containsString("constraint"),
+                    is(nullValue())
             ));
-        }
+        });
     }
 
     @Test
-    void testNodeStatusQueries() {
+    @RunOnVertxContext
+    void testNodeStatusQueries(TransactionalUniAsserter asserter) {
         LOG.info("Testing Node status-based queries");
 
         // Create drive first
@@ -182,7 +168,7 @@ public class NodeEntityTest {
         drive.s3Bucket = "status-bucket-" + System.currentTimeMillis();
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();;
+        asserter.execute(() -> drive.persist());
 
         // Create nodes with different statuses
         Node activeNode = new Node();
@@ -192,7 +178,7 @@ public class NodeEntityTest {
         activeNode.status = "ACTIVE";
         activeNode.createdAt = Instant.now();
         activeNode.updatedAt = Instant.now();
-        activeNode.persist().await().indefinitely();;
+        asserter.execute(() -> activeNode.persist());
 
         Node processingNode = new Node();
         processingNode.nodeId = "processing-node-" + System.currentTimeMillis();
@@ -201,24 +187,20 @@ public class NodeEntityTest {
         processingNode.status = "PROCESSING";
         processingNode.createdAt = Instant.now();
         processingNode.updatedAt = Instant.now();
-        processingNode.persist().await().indefinitely();;
+        asserter.execute(() -> processingNode.persist());
 
-        // Test find by status
-        List<Node> activeNodes = Node.<Node>list("status", "ACTIVE").await().indefinitely();
-        assertThat("Should find active nodes", activeNodes.size(), is(greaterThanOrEqualTo(1)));
+        asserter.assertThat(() -> Node.<Node>list("status", "ACTIVE"), activeNodes -> {
+            assertThat("Should find active nodes", activeNodes.size(), is(greaterThanOrEqualTo(1)));
+            boolean foundActive = activeNodes.stream()
+                    .anyMatch(node -> node.nodeId.equals(activeNode.nodeId));
+            assertThat("Should find our active node", foundActive, is(true));
+        });
 
-        List<Node> processingNodes = Node.<Node>list("status", "PROCESSING").await().indefinitely();
-        assertThat("Should find processing nodes", processingNodes.size(), is(greaterThanOrEqualTo(1)));
-
-        // Verify our specific nodes are in the results
-        boolean foundActive = activeNodes.stream()
-            .anyMatch(node -> node.nodeId.equals(activeNode.nodeId));
-        boolean foundProcessing = processingNodes.stream()
-            .anyMatch(node -> node.nodeId.equals(processingNode.nodeId));
-
-        assertThat("Should find our active node", foundActive, is(true));
-        assertThat("Should find our processing node", foundProcessing, is(true));
-
-        LOG.infof("Node status queries working correctly");
+        asserter.assertThat(() -> Node.<Node>list("status", "PROCESSING"), processingNodes -> {
+            assertThat("Should find processing nodes", processingNodes.size(), is(greaterThanOrEqualTo(1)));
+            boolean foundProcessing = processingNodes.stream()
+                    .anyMatch(node -> node.nodeId.equals(processingNode.nodeId));
+            assertThat("Should find our processing node", foundProcessing, is(true));
+        });
     }
 }
