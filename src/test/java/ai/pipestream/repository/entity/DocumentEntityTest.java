@@ -1,5 +1,7 @@
 package ai.pipestream.repository.entity;
+import io.quarkus.hibernate.reactive.panache.Panache;
 
+import io.quarkus.hibernate.reactive.panache.Panache;
 import io.quarkus.test.junit.QuarkusTest;
 import org.jboss.logging.Logger;
 import org.junit.jupiter.api.Test;
@@ -38,7 +40,7 @@ public class DocumentEntityTest {
         document.status = "ACTIVE";
 
         // Persist the document
-        document.persist().await().indefinitely();
+        Panache.withTransaction(document::persist).await().indefinitely();
 
         // Verify it was saved
         assertThat(document.id, is(notNullValue()));
@@ -76,7 +78,7 @@ public class DocumentEntityTest {
         doc1.updatedAt = Instant.now();
         doc1.version = 1;
         doc1.status = "ACTIVE";
-        doc1.persist().await().indefinitely();
+        doc1::persist).await().indefinitely();;
 
         // Try to create document with same documentId - should fail
         Document doc2 = new Document();
@@ -92,7 +94,7 @@ public class DocumentEntityTest {
         doc2.status = "ACTIVE";
 
         try {
-            doc2.persist().await().indefinitely();
+            doc2::persist).await().indefinitely();;
             assertThat("Should have failed due to unique constraint", false);
         } catch (Exception e) {
             LOG.infof("Correctly caught unique constraint violation: %s", e.getMessage());
@@ -122,7 +124,7 @@ public class DocumentEntityTest {
         document.updatedAt = Instant.now();
         document.version = 1;
         document.status = "ACTIVE";
-        document.persist().await().indefinitely();
+        document::persist).await().indefinitely();;
 
         Long originalId = document.id;
         Instant originalCreated = document.createdAt;
@@ -133,7 +135,7 @@ public class DocumentEntityTest {
         document.contentSize = 150L;
         document.version = 2;
         document.updatedAt = Instant.now();
-        document.persist().await().indefinitely();
+        document::persist).await().indefinitely();;
 
         // Verify updates
         Document updatedDoc = Document.<Document>findById(document.id).await().indefinitely();
@@ -164,7 +166,7 @@ public class DocumentEntityTest {
         activeDoc.updatedAt = Instant.now();
         activeDoc.version = 1;
         activeDoc.status = "ACTIVE";
-        activeDoc.persist().await().indefinitely();
+        activeDoc::persist).await().indefinitely();;
 
         Document inactiveDoc = new Document();
         inactiveDoc.documentId = "inactive-doc-" + System.currentTimeMillis();
@@ -177,7 +179,7 @@ public class DocumentEntityTest {
         inactiveDoc.updatedAt = Instant.now();
         inactiveDoc.version = 1;
         inactiveDoc.status = "DELETED";
-        inactiveDoc.persist().await().indefinitely();
+        inactiveDoc::persist).await().indefinitely();;
 
         // Test find by status
         List<Document> activeDocuments = Document.<Document>list("status", "ACTIVE").await().indefinitely();

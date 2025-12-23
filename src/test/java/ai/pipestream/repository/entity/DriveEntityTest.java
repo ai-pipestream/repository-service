@@ -1,4 +1,5 @@
 package ai.pipestream.repository.entity;
+import io.quarkus.hibernate.reactive.panache.Panache;
 
 import io.quarkus.test.junit.QuarkusTest;
 import org.jboss.logging.Logger;
@@ -35,7 +36,7 @@ public class DriveEntityTest {
         drive.updatedAt = Instant.now();
 
         // Persist the drive
-        drive.persist().await().indefinitely();
+        drive::persist).await().indefinitely();;
 
         // Verify it was saved
         assertThat(drive.id, is(notNullValue()));
@@ -68,7 +69,7 @@ public class DriveEntityTest {
         drive1.s3Bucket = "unique-bucket-" + System.currentTimeMillis();
         drive1.createdAt = Instant.now();
         drive1.updatedAt = Instant.now();
-        drive1.persist().await().indefinitely();
+        drive1::persist).await().indefinitely();;
 
         // Try to create drive with same driveId - should fail
         Drive drive2 = new Drive();
@@ -79,7 +80,7 @@ public class DriveEntityTest {
         drive2.updatedAt = Instant.now();
 
         try {
-            drive2.persist().await().indefinitely();
+            drive2::persist).await().indefinitely();;
             assertThat("Should have failed due to unique constraint", false);
         } catch (Exception e) {
             // Expected - unique constraint violation
@@ -105,7 +106,7 @@ public class DriveEntityTest {
         drive.s3Bucket = "update-bucket-" + System.currentTimeMillis();
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();
+        drive::persist).await().indefinitely();;
 
         Long originalId = drive.id;
         Instant originalCreated = drive.createdAt;
@@ -115,7 +116,7 @@ public class DriveEntityTest {
         drive.description = "Updated description";
         drive.s3Prefix = "updated-prefix/";
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();
+        drive::persist).await().indefinitely();;
 
         // Verify updates
         Drive updatedDrive = Drive.<Drive>findById(drive.id).await().indefinitely();
@@ -140,7 +141,7 @@ public class DriveEntityTest {
         drive.s3Bucket = "delete-bucket-" + System.currentTimeMillis();
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();
+        drive::persist).await().indefinitely();;
 
         Long driveId = drive.id;
 
@@ -167,7 +168,7 @@ public class DriveEntityTest {
         drive1.s3Bucket = "list-bucket-1-" + System.currentTimeMillis();
         drive1.createdAt = Instant.now();
         drive1.updatedAt = Instant.now();
-        drive1.persist().await().indefinitely();
+        drive1::persist).await().indefinitely();;
 
         Drive drive2 = new Drive();
         drive2.driveId = "list-drive-2-" + System.currentTimeMillis();
@@ -175,7 +176,7 @@ public class DriveEntityTest {
         drive2.s3Bucket = "list-bucket-2-" + System.currentTimeMillis();
         drive2.createdAt = Instant.now();
         drive2.updatedAt = Instant.now();
-        drive2.persist().await().indefinitely();
+        drive2::persist).await().indefinitely();;
 
         // Test count
         long totalDrives = Drive.count().await().indefinitely();

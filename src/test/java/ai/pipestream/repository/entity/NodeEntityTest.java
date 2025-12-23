@@ -1,4 +1,5 @@
 package ai.pipestream.repository.entity;
+import io.quarkus.hibernate.reactive.panache.Panache;
 
 import io.quarkus.test.junit.QuarkusTest;
 import org.jboss.logging.Logger;
@@ -30,7 +31,7 @@ public class NodeEntityTest {
         drive.s3Bucket = "node-test-bucket-" + System.currentTimeMillis();
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();
+        drive::persist).await().indefinitely();;
 
         // Create a new node
         Node node = new Node();
@@ -48,7 +49,7 @@ public class NodeEntityTest {
         node.updatedAt = Instant.now();
 
         // Persist the node
-        node.persist().await().indefinitely();
+        node::persist).await().indefinitely();;
 
         // Verify it was saved
         assertThat(node.id, is(notNullValue()));
@@ -81,7 +82,7 @@ public class NodeEntityTest {
         drive.s3Bucket = "relation-bucket-" + System.currentTimeMillis();
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();
+        drive::persist).await().indefinitely();;
 
         Document document = new Document();
         document.documentId = "relation-doc-" + System.currentTimeMillis();
@@ -94,7 +95,7 @@ public class NodeEntityTest {
         document.updatedAt = Instant.now();
         document.version = 1;
         document.status = "ACTIVE";
-        document.persist().await().indefinitely();
+        document::persist).await().indefinitely();;
 
         // Create node linked to both drive and document
         Node node = new Node();
@@ -107,7 +108,7 @@ public class NodeEntityTest {
         node.status = "ACTIVE";
         node.createdAt = Instant.now();
         node.updatedAt = Instant.now();
-        node.persist().await().indefinitely();
+        node::persist).await().indefinitely();;
 
         // Verify relationships
         assertThat(node.drive.id, is(drive.id));
@@ -135,7 +136,7 @@ public class NodeEntityTest {
         drive.s3Bucket = "constraint-bucket-" + System.currentTimeMillis();
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();
+        drive::persist).await().indefinitely();;
 
         // Create first node
         Node node1 = new Node();
@@ -145,7 +146,7 @@ public class NodeEntityTest {
         node1.status = "ACTIVE";
         node1.createdAt = Instant.now();
         node1.updatedAt = Instant.now();
-        node1.persist().await().indefinitely();
+        node1::persist).await().indefinitely();;
 
         // Try to create node with same nodeId - should fail
         Node node2 = new Node();
@@ -157,7 +158,7 @@ public class NodeEntityTest {
         node2.updatedAt = Instant.now();
 
         try {
-            node2.persist().await().indefinitely();
+            node2::persist).await().indefinitely();;
             assertThat("Should have failed due to unique constraint", false);
         } catch (Exception e) {
             LOG.infof("Correctly caught unique constraint violation: %s", e.getMessage());
@@ -181,7 +182,7 @@ public class NodeEntityTest {
         drive.s3Bucket = "status-bucket-" + System.currentTimeMillis();
         drive.createdAt = Instant.now();
         drive.updatedAt = Instant.now();
-        drive.persist().await().indefinitely();
+        drive::persist).await().indefinitely();;
 
         // Create nodes with different statuses
         Node activeNode = new Node();
@@ -191,7 +192,7 @@ public class NodeEntityTest {
         activeNode.status = "ACTIVE";
         activeNode.createdAt = Instant.now();
         activeNode.updatedAt = Instant.now();
-        activeNode.persist().await().indefinitely();
+        activeNode::persist).await().indefinitely();;
 
         Node processingNode = new Node();
         processingNode.nodeId = "processing-node-" + System.currentTimeMillis();
@@ -200,7 +201,7 @@ public class NodeEntityTest {
         processingNode.status = "PROCESSING";
         processingNode.createdAt = Instant.now();
         processingNode.updatedAt = Instant.now();
-        processingNode.persist().await().indefinitely();
+        processingNode::persist).await().indefinitely();;
 
         // Test find by status
         List<Node> activeNodes = Node.<Node>list("status", "ACTIVE").await().indefinitely();

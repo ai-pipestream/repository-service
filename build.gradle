@@ -3,11 +3,25 @@ plugins {
     alias(libs.plugins.quarkus)
     alias(libs.plugins.maven.publish)
     id 'signing'
-    id 'com.gradleup.nmcp' version '1.2.1'
-    id 'ai.pipestream.proto-toolchain' version '0.7.7'
+    alias(libs.plugins.nmcp.single)
+    alias(libs.plugins.axion.release)
+    alias(libs.plugins.proto.toolchain)
 }
 
 def pipestreamBomVersion = findProperty('pipestreamBomVersion') ?: '0.7.10'
+
+// Axion-release configuration for automatic versioning - ADD THIS BLOCK
+scmVersion {
+    tag {
+        prefix = 'v'
+        initialVersion = '0.0.1'
+    }
+    checks {
+        uncommittedChanges = false
+        aheadOfRemote = false
+        snapshotDependencies = false
+    }
+}
 
 // Proto toolchain configuration - fetches from Git and generates Java/gRPC code
 pipestreamProtos {
@@ -99,7 +113,7 @@ dependencies {
 }
 
 group = 'ai.pipestream'
-version = "${pipestreamBomVersion}"
+version = "${scmVersion.version}"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_21
@@ -178,5 +192,33 @@ publishing {
                 }
             }
         }
+    }
+}
+
+// GPG Signing (uses org-level secrets) - ADD THIS BLOCK
+signing {
+    def signingKey = System.getenv("GPG_PRIVATE_KEY")
+    def signingPassword = System.getenv("GPG_PASSPHRASE")
+
+    if (signingKey && signingPassword) {
+        useInMemoryPgpKeys(signingKey, signingPassword)
+        sign publishing.publications.maven
+    }
+}
+
+// Ensure signing tasks run before NMCP publication - ADD THIS BLOCK
+afterEvaluate {
+    tasks.matching { it.name.startsWith("nmcpZipAllPublications") || it.name.startsWith("nmcpPublishAllPublicationsToCentralPortal") }
+        .configureEach { nmcpTask ->
+            nmcpTask.dependsOn(tasks.withType(Sign))
+        }
+}
+
+// Maven Central publishing via NMCP - ADD THIS BLOCK
+nmcp {
+    publishAllPublicationsToCentralPortal {
+        username = providers.environmentVariable("MAVEN_CENTRAL_USERNAME")
+        password = providers.environmentVariable("MAVEN_CENTRAL_PASSWORD")
+        publishingType = "AUTOMATIC"
     }
 }
