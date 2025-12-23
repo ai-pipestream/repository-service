@@ -95,7 +95,7 @@ dependencies {
     implementation libs.httpclient5
 
     // Caching (Guava for in-memory cache with eviction)
-    implementation 'com.google.guava:guava:33.3.1-jre'
+    implementation 'com.google.guava:guava:33.5.0-jre'
 
     // Micrometer for metrics
     implementation 'io.quarkus:quarkus-micrometer'
