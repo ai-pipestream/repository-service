@@ -2,6 +2,7 @@ package ai.pipestream.repository.intake;
 
 import ai.pipestream.data.v1.PipeDoc;
 import ai.pipestream.repository.config.FeatureFlags;
+import ai.pipestream.repository.entity.PipeDocRecord;
 import ai.pipestream.repository.filesystem.upload.v1.GetUploadedDocumentRequest;
 import ai.pipestream.repository.filesystem.upload.v1.GetUploadedDocumentResponse;
 import ai.pipestream.repository.filesystem.upload.v1.MutinyNodeUploadServiceGrpc;
@@ -62,9 +63,10 @@ public class NodeUploadGrpcService extends MutinyNodeUploadServiceGrpc.NodeUploa
         return storageService.store(document)
                 .map(stored -> {
                     metrics.recordUploadInitiated();
+                    // Return the doc_id (not node_id) as document_id in the response
                     return UploadFilesystemPipeDocResponse.newBuilder()
                             .setSuccess(true)
-                            .setDocumentId(stored.documentId())
+                            .setDocumentId(document.getDocId())
                             .setS3Key(stored.s3Key())
                             .setMessage("stored")
                             .build();
@@ -96,13 +98,27 @@ public class NodeUploadGrpcService extends MutinyNodeUploadServiceGrpc.NodeUploa
 
         String documentId = request.getDocumentId();
 
-        return storageService.get(documentId)
-                .onItem().ifNull().failWith(() -> Status.NOT_FOUND
-                        .withDescription("Document not found: " + documentId)
-                        .asRuntimeException())
-                .map(doc -> GetUploadedDocumentResponse.newBuilder()
-                        .setDocument(doc)
-                        .build())
+        // For initial intake lookups (docId only), query by docId alone and assume it's the initial intake state.
+        // This works because initial intake creates only one entry per docId with graph_address_id = datasource_id.
+        // Note: If multiple entries exist for the same docId (different graph_address_id values),
+        // this will return the first one found. For more precise lookups, use GetPipeDocByReference.
+        return PipeDocRecord.<PipeDocRecord>find("docId", documentId).firstResult()
+                .flatMap(record -> {
+                    if (record == null) {
+                        return Uni.createFrom().failure(Status.NOT_FOUND
+                                .withDescription("Document not found: " + documentId)
+                                .asRuntimeException());
+                    }
+                    
+                    // Fetch the PipeDoc from S3 using the record's nodeId
+                    return storageService.get(record.nodeId.toString())
+                            .onItem().ifNull().failWith(() -> Status.NOT_FOUND
+                                    .withDescription("Document data not found in storage: " + documentId)
+                                    .asRuntimeException())
+                            .map(doc -> GetUploadedDocumentResponse.newBuilder()
+                                    .setDocument(doc)
+                                    .build());
+                })
                 .onFailure().invoke(e -> {
                     if (!(e instanceof io.grpc.StatusRuntimeException)) {
                         LOG.error("Failed to get document", e);

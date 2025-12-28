@@ -1,12 +1,15 @@
 package ai.pipestream.repository.entity;
+import ai.pipestream.repository.util.PipeDocUuidGenerator;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.hibernate.reactive.panache.TransactionalUniAsserter;
 import io.quarkus.test.vertx.RunOnVertxContext;
+import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
@@ -20,6 +23,9 @@ public class PipeDocRecordEntityTest {
 
     private static final Logger LOG = Logger.getLogger(PipeDocRecordEntityTest.class);
 
+    @Inject
+    PipeDocUuidGenerator uuidGenerator;
+
     @Test
     @RunOnVertxContext
     void testCreateAndFindPipeDocRecord(TransactionalUniAsserter asserter) {
@@ -28,6 +34,7 @@ public class PipeDocRecordEntityTest {
         // Create a new PipeDocRecord (metadata only, no pipedoc bytes in DB)
         PipeDocRecord record = new PipeDocRecord();
         record.docId = "test-doc-" + System.currentTimeMillis();
+        record.graphAddressId = "node-1"; // Graph node ID
         record.accountId = "acc-test";
         record.datasourceId = "ds-test";
         record.checksum = "checksum123";
@@ -40,20 +47,25 @@ public class PipeDocRecordEntityTest {
         record.contentType = "text/plain";
         record.filename = "test-document.txt";
         record.createdAt = Instant.now();
+        
+        // Generate deterministic UUID for node_id
+        record.nodeId = uuidGenerator.generateNodeId(record.docId, record.graphAddressId, record.accountId);
 
         // Persist the record
         asserter.execute(() -> record.persist());
 
-        asserter.assertThat(() -> PipeDocRecord.<PipeDocRecord>findById(record.id), foundById -> {
+        asserter.assertThat(() -> PipeDocRecord.<PipeDocRecord>findById(record.nodeId), foundById -> {
             assertThat(foundById, is(notNullValue()));
             assertThat(foundById.docId, is(record.docId));
+            assertThat(foundById.graphAddressId, is(record.graphAddressId));
             assertThat(foundById.checksum, is("checksum123"));
             assertThat(foundById.sizeBytes, is(1024L));
         });
 
-        asserter.assertThat(() -> PipeDocRecord.<PipeDocRecord>find("docId", record.docId).firstResult(), foundByDocId -> {
-            assertThat(foundByDocId, is(notNullValue()));
-            assertThat(foundByDocId.id, is(record.id));
+        asserter.assertThat(() -> PipeDocRecord.<PipeDocRecord>find("docId = ?1 and graphAddressId = ?2 and accountId = ?3", 
+                record.docId, record.graphAddressId, record.accountId).firstResult(), foundByComposite -> {
+            assertThat(foundByComposite, is(notNullValue()));
+            assertThat(foundByComposite.nodeId, is(record.nodeId));
         });
     }
 
@@ -65,6 +77,7 @@ public class PipeDocRecordEntityTest {
         // Create first record
         PipeDocRecord record1 = new PipeDocRecord();
         record1.docId = "unique-doc-" + System.currentTimeMillis();
+        record1.graphAddressId = "node-1";
         record1.accountId = "acc-unique";
         record1.datasourceId = "ds-unique";
         record1.checksum = "unique123";
@@ -76,12 +89,15 @@ public class PipeDocRecordEntityTest {
         record1.contentType = "text/plain";
         record1.filename = "unique-document.txt";
         record1.createdAt = Instant.now();
+        record1.nodeId = uuidGenerator.generateNodeId(record1.docId, record1.graphAddressId, record1.accountId);
         asserter.execute(() -> record1.persist());
 
-        // Try to create record with same docId - should fail
+        // Try to create record with same nodeId (PK) - should fail
         PipeDocRecord record2 = new PipeDocRecord();
-        record2.docId = record1.docId; // Same docId as record1
-        record2.accountId = "acc-fail";
+        record2.nodeId = record1.nodeId; // Same nodeId (PK) as record1
+        record2.docId = record1.docId; // Same docId, graphAddressId, accountId = same UUID
+        record2.graphAddressId = record1.graphAddressId;
+        record2.accountId = record1.accountId;
         record2.datasourceId = "ds-fail";
         record2.checksum = "different-checksum";
         record2.driveName = "different-drive";
@@ -99,6 +115,7 @@ public class PipeDocRecordEntityTest {
                     containsString("duplicate"),
                     containsString("unique"),
                     containsString("constraint"),
+                    containsString("primary key"),
                     is(nullValue())
             ));
         });
@@ -112,6 +129,7 @@ public class PipeDocRecordEntityTest {
         // Create record with S3 reference
         PipeDocRecord record = new PipeDocRecord();
         record.docId = "s3-ref-doc-" + System.currentTimeMillis();
+        record.graphAddressId = "node-s3-1";
         record.accountId = "acc-s3";
         record.datasourceId = "ds-s3";
         record.checksum = "sha256-abc123";
@@ -124,9 +142,10 @@ public class PipeDocRecordEntityTest {
         record.contentType = "application/pdf";
         record.filename = "document.pdf";
         record.createdAt = Instant.now();
+        record.nodeId = uuidGenerator.generateNodeId(record.docId, record.graphAddressId, record.accountId);
         asserter.execute(() -> record.persist());
 
-        asserter.assertThat(() -> PipeDocRecord.<PipeDocRecord>findById(record.id), retrieved -> {
+        asserter.assertThat(() -> PipeDocRecord.<PipeDocRecord>findById(record.nodeId), retrieved -> {
             assertThat("Should store object key", retrieved.objectKey,
                     is("uploads/account-123/connector-456/doc-789/document.pdf"));
             assertThat("Should store drive name", retrieved.driveName, is("customer-drive"));
@@ -143,6 +162,7 @@ public class PipeDocRecordEntityTest {
         // Create multiple records
         PipeDocRecord record1 = new PipeDocRecord();
         record1.docId = "query-doc-1-" + System.currentTimeMillis();
+        record1.graphAddressId = "node-q1";
         record1.accountId = "acc-q1";
         record1.datasourceId = "ds-q1";
         record1.checksum = "query123";
@@ -154,10 +174,12 @@ public class PipeDocRecordEntityTest {
         record1.contentType = "text/plain";
         record1.filename = "query-document-1.txt";
         record1.createdAt = Instant.now();
+        record1.nodeId = uuidGenerator.generateNodeId(record1.docId, record1.graphAddressId, record1.accountId);
         asserter.execute(() -> record1.persist());
 
         PipeDocRecord record2 = new PipeDocRecord();
         record2.docId = "query-doc-2-" + System.currentTimeMillis();
+        record2.graphAddressId = "node-q2";
         record2.accountId = "acc-q2";
         record2.datasourceId = "ds-q2";
         record2.checksum = "query456";
@@ -169,6 +191,7 @@ public class PipeDocRecordEntityTest {
         record2.contentType = "text/plain";
         record2.filename = "query-document-2.txt";
         record2.createdAt = Instant.now();
+        record2.nodeId = uuidGenerator.generateNodeId(record2.docId, record2.graphAddressId, record2.accountId);
         asserter.execute(() -> record2.persist());
 
         asserter.assertThat(() -> PipeDocRecord.count("driveName", "query-drive-1"), driveRecordsCount ->

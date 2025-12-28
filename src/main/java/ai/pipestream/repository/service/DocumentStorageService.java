@@ -6,9 +6,9 @@ import ai.pipestream.repository.account.AccountCacheService;
 import ai.pipestream.repository.entity.PipeDocRecord;
 import ai.pipestream.repository.kafka.RepositoryEventEmitter;
 import ai.pipestream.repository.s3.S3Config;
+import ai.pipestream.repository.util.PipeDocUuidGenerator;
 import io.quarkus.hibernate.reactive.panache.Panache;
 import io.smallrye.mutiny.Uni;
-import io.smallrye.mutiny.vertx.MutinyHelper;
 import io.vertx.core.Context;
 import io.vertx.mutiny.core.Vertx;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -55,6 +55,12 @@ public class DocumentStorageService {
     @Inject
     io.vertx.mutiny.core.Vertx vertx;
 
+    @Inject
+    PipeDocUuidGenerator uuidGenerator;
+
+    @Inject
+    ai.pipestream.repository.graph.GraphValidationService graphValidationService;
+
     public DocumentStorageService() {
         LOG.info("DocumentStorageService initialized (Reactive)");
     }
@@ -63,25 +69,37 @@ public class DocumentStorageService {
      * Store a {@link PipeDoc}.
      *
      * Validates account, stores PipeDoc to S3, persists metadata to DB, emits event.
+     * Uses datasource_id from ownership as the graph_address_id (for initial intake).
      *
      * @param document the document to store
      * @return Uni containing storage result containing the resolved document id and S3 key
      */
     public Uni<StoredDocument> store(PipeDoc document) {
-        return store(document, null);
+        return store(document, null, null);
     }
 
     /**
      * Store a {@link PipeDoc} with a specific request ID for tracing.
+     *
+     * Uses datasource_id from ownership as the graph_address_id (for initial intake).
      *
      * @param document the document to store
      * @param requestId optional request ID for tracing (auto-generated if null)
      * @return Uni containing storage result
      */
     public Uni<StoredDocument> store(PipeDoc document, String requestId) {
-        // Capture the duplicated request context immediately
-        Context requestContext = Vertx.currentContext().getDelegate();
-        
+        return store(document, requestId, null);
+    }
+
+    /**
+     * Store a {@link PipeDoc} with a specific request ID and graph location ID.
+     *
+     * @param document the document to store
+     * @param requestId optional request ID for tracing (auto-generated if null)
+     * @param graphLocationId optional graph location ID (if null, uses datasource_id from ownership)
+     * @return Uni containing storage result
+     */
+    public Uni<StoredDocument> store(PipeDoc document, String requestId, String graphLocationId) {
         if (document == null) {
             return Uni.createFrom().failure(new IllegalArgumentException("document must not be null"));
         }
@@ -127,96 +145,154 @@ public class DocumentStorageService {
                             ? UUID.randomUUID().toString()
                             : requestId;
 
-                    String driveName = "default";
-                    String objectKey = buildObjectKey(driveName, accountId, connectorId, finalDocId);
-
-                    byte[] pipeDocBytes = docToStore.toByteArray();
-                    String contentType = "application/x-protobuf";
-                    long sizeBytes = pipeDocBytes.length;
-                    String checksum = computeSha256(pipeDocBytes);
-
-                    LOG.infof("Storing PipeDoc doc_id=%s to s3://%s/%s (bytes=%d)",
-                            finalDocId, s3Config.bucket(), objectKey, sizeBytes);
-
-                    // 2. Store to S3
-                    return Uni.createFrom().completionStage(
-                            s3AsyncClient.putObject(
-                                    PutObjectRequest.builder()
-                                            .bucket(s3Config.bucket())
-                                            .key(objectKey)
-                                            .contentType(contentType)
-                                            .contentLength(sizeBytes)
-                                            .build(),
-                                    AsyncRequestBody.fromBytes(pipeDocBytes)
-                            )
-                    )
-                    .emitOn(runnable -> {
-                        if (requestContext != null) {
-                            requestContext.runOnContext(v -> runnable.run());
-                        } else {
-                            // Fallback if no context (e.g. background task), though unlikely in gRPC
-                            vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
-                        }
-                    })
-                    .flatMap(putResponse -> {
-                        String etag = putResponse.eTag();
-                        String versionId = putResponse.versionId();
-
-                        // 3. Persist to DB (Reactive Transaction)
-                        return Panache.withTransaction(() -> {
-                            PipeDocRecord record = new PipeDocRecord();
-                            record.docId = finalDocId;
-                            record.accountId = accountId;
-                            record.datasourceId = finalDatasourceId;
-                            record.connectorId = connectorId;
-                            record.driveName = driveName;
-                            record.objectKey = objectKey;
-                            record.pipedocObjectKey = objectKey;
-                            record.versionId = versionId;
-                            record.etag = etag;
-                            record.sizeBytes = sizeBytes;
-                            record.contentType = contentType;
-                            record.filename = finalDocId + ".pb";
-                            record.checksum = checksum == null ? "" : checksum;
-                            record.createdAt = Instant.now();
-
-                            return record.persist();
-                        }).map(persisted -> {
-                            // 4. Emit Event
-                            eventEmitter.emitCreated(
-                                    finalDocId,
-                                    accountId,
-                                    objectKey,
-                                    objectKey,
-                                    sizeBytes,
-                                    checksum,
-                                    s3Config.bucket(),
-                                    versionId,
-                                    resolvedRequestId,
-                                    connectorId
-                            );
-
-                            return new StoredDocument(finalDocId, objectKey, versionId, etag, sizeBytes, checksum);
-                        });
-                    });
+                    // Determine graph_address_id: use provided graphLocationId, or fallback to datasource_id
+                    if (graphLocationId != null && !graphLocationId.isBlank()) {
+                        // Validate graph location ID against graph service
+                        return graphValidationService.validateGraphLocation(graphLocationId, accountId)
+                                .flatMap(isGraphLocationValid -> {
+                                    if (!isGraphLocationValid) {
+                                        return Uni.createFrom().failure(new IllegalArgumentException(
+                                                "Invalid graph_location_id: " + graphLocationId + " for account: " + accountId));
+                                    }
+                                    return continueStoring(docToStore, finalDocId, accountId, connectorId, finalDatasourceId,
+                                            resolvedRequestId, graphLocationId);
+                                });
+                    } else {
+                        // Use datasource_id as graph_address_id (for initial intake)
+                        return continueStoring(docToStore, finalDocId, accountId, connectorId, finalDatasourceId,
+                                resolvedRequestId, finalDatasourceId);
+                    }
                 });
     }
 
     /**
-     * Retrieve a PipeDoc by document ID.
-     *
-     * @param documentId the document ID
-     * @return Uni containing the PipeDoc if found, or null/empty
+     * Continues the storage process after graph address ID is resolved.
      */
-    public Uni<PipeDoc> get(String documentId) {
+    private Uni<StoredDocument> continueStoring(PipeDoc docToStore, String finalDocId, String accountId, 
+            String connectorId, String finalDatasourceId, String resolvedRequestId, String resolvedGraphAddressId) {
         Context requestContext = Vertx.currentContext().getDelegate();
         
-        if (documentId == null || documentId.isBlank()) {
+        String driveName = "default";
+        String objectKey = buildObjectKey(driveName, accountId, connectorId, finalDocId);
+
+        byte[] pipeDocBytes = docToStore.toByteArray();
+        String contentType = "application/x-protobuf";
+        long sizeBytes = pipeDocBytes.length;
+        String checksum = computeSha256(pipeDocBytes);
+
+        LOG.infof("Storing PipeDoc doc_id=%s, graph_address_id=%s to s3://%s/%s (bytes=%d)",
+                finalDocId, resolvedGraphAddressId, s3Config.bucket(), objectKey, sizeBytes);
+
+        // 2. Store to S3
+        return Uni.createFrom().completionStage(
+                s3AsyncClient.putObject(
+                        PutObjectRequest.builder()
+                                .bucket(s3Config.bucket())
+                                .key(objectKey)
+                                .contentType(contentType)
+                                .contentLength(sizeBytes)
+                                .build(),
+                        AsyncRequestBody.fromBytes(pipeDocBytes)
+                )
+        )
+        .emitOn(runnable -> {
+            if (requestContext != null) {
+                requestContext.runOnContext(v -> runnable.run());
+            } else {
+                // Fallback if no context (e.g. background task), though unlikely in gRPC
+                vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
+            }
+        })
+        .flatMap(putResponse -> {
+            String etag = putResponse.eTag();
+            String versionId = putResponse.versionId();
+
+            // 3. Generate deterministic UUID for node_id using (doc_id, graph_address_id, account_id)
+            UUID nodeId = uuidGenerator.generateNodeId(finalDocId, resolvedGraphAddressId, accountId);
+            
+            // 4. Persist to DB (Reactive Transaction with UPSERT pattern)
+            return Panache.withTransaction(() -> 
+                PipeDocRecord.<PipeDocRecord>findById(nodeId)
+                        .flatMap(existingRecord -> {
+                            if (existingRecord != null) {
+                                // UPDATE existing record (new version)
+                                LOG.debugf("Updating existing PipeDocRecord: node_id=%s", nodeId);
+                                existingRecord.objectKey = objectKey;
+                                existingRecord.pipedocObjectKey = objectKey;
+                                existingRecord.versionId = versionId;
+                                existingRecord.etag = etag;
+                                existingRecord.sizeBytes = sizeBytes;
+                                existingRecord.contentType = contentType;
+                                existingRecord.checksum = checksum == null ? "" : checksum;
+                                // Note: created_at stays the same, we could add updated_at if needed
+                                return existingRecord.persist();
+                            } else {
+                                // INSERT new record
+                                LOG.debugf("Creating new PipeDocRecord: node_id=%s", nodeId);
+                                PipeDocRecord record = new PipeDocRecord();
+                                record.nodeId = nodeId;
+                                record.docId = finalDocId;
+                                record.graphAddressId = resolvedGraphAddressId;
+                                record.accountId = accountId;
+                                record.datasourceId = finalDatasourceId;
+                                record.connectorId = connectorId;
+                                record.driveName = driveName;
+                                record.objectKey = objectKey;
+                                record.pipedocObjectKey = objectKey;
+                                record.versionId = versionId;
+                                record.etag = etag;
+                                record.sizeBytes = sizeBytes;
+                                record.contentType = contentType;
+                                record.filename = finalDocId + ".pb";
+                                record.checksum = checksum == null ? "" : checksum;
+                                record.createdAt = Instant.now();
+                                return record.persist();
+                            }
+                        })
+            ).map(persisted -> {
+                // 5. Emit Event
+                eventEmitter.emitCreated(
+                        finalDocId,
+                        accountId,
+                        objectKey,
+                        objectKey,
+                        sizeBytes,
+                        checksum,
+                        s3Config.bucket(),
+                        versionId,
+                        resolvedRequestId,
+                        connectorId
+                );
+
+                // Return node_id (UUID) as the repository identifier
+                return new StoredDocument(nodeId.toString(), objectKey, versionId, etag, sizeBytes, checksum);
+            });
+        });
+    }
+
+    /**
+     * Retrieve a PipeDoc by repository node ID (UUID).
+     *
+     * @param nodeId the repository node ID (UUID as string)
+     * @return Uni containing the PipeDoc if found, or null/empty
+     */
+    public Uni<PipeDoc> get(String nodeId) {
+        Context requestContext = Vertx.currentContext().getDelegate();
+        
+        if (nodeId == null || nodeId.isBlank()) {
             return Uni.createFrom().nullItem();
         }
 
-        // Look up metadata in DB
-        return PipeDocRecord.<PipeDocRecord>find("docId", documentId).firstResult()
+        UUID uuid;
+        try {
+            uuid = UUID.fromString(nodeId);
+        } catch (IllegalArgumentException e) {
+            LOG.warnf("Invalid UUID format for node_id: %s", nodeId);
+            return Uni.createFrom().nullItem();
+        }
+
+        // Look up metadata in DB by node_id (PK)
+        return PipeDocRecord.<PipeDocRecord>findById(uuid)
                 .flatMap(record -> {
                     if (record == null) {
                         return Uni.createFrom().nullItem();
@@ -243,7 +319,64 @@ public class DocumentStorageService {
                         try {
                             return PipeDoc.parseFrom(response.asByteArray());
                         } catch (Exception e) {
-                            LOG.errorf(e, "Failed to parse PipeDoc from S3 for doc_id=%s", documentId);
+                            LOG.errorf(e, "Failed to parse PipeDoc from S3 for node_id=%s", nodeId);
+                            return null;
+                        }
+                    }).onFailure(NoSuchKeyException.class).recoverWithItem((PipeDoc) null);
+                });
+    }
+
+    /**
+     * Retrieve a PipeDoc by logical identifiers (for initial intake lookups).
+     * Uses the composite key (doc_id, graph_address_id, account_id) to find the document.
+     * For initial intake, graph_address_id is typically the datasource_id.
+     *
+     * @param docId The document identifier
+     * @param graphAddressId The graph address ID (datasource_id for intake, or graph node ID)
+     * @param accountId The account identifier
+     * @return Uni containing the PipeDoc if found, or null/empty
+     */
+    public Uni<PipeDoc> getByCompositeKey(String docId, String graphAddressId, String accountId) {
+        Context requestContext = Vertx.currentContext().getDelegate();
+        
+        if (docId == null || docId.isBlank() || graphAddressId == null || graphAddressId.isBlank() 
+                || accountId == null || accountId.isBlank()) {
+            return Uni.createFrom().nullItem();
+        }
+
+        // Generate the deterministic UUID to look up by PK
+        UUID nodeId = uuidGenerator.generateNodeId(docId, graphAddressId, accountId);
+
+        // Look up metadata in DB by node_id (PK)
+        return PipeDocRecord.<PipeDocRecord>findById(nodeId)
+                .flatMap(record -> {
+                    if (record == null) {
+                        return Uni.createFrom().nullItem();
+                    }
+
+                    // Fetch from S3
+                    return Uni.createFrom().completionStage(
+                            s3AsyncClient.getObject(
+                                    GetObjectRequest.builder()
+                                            .bucket(s3Config.bucket())
+                                            .key(record.pipedocObjectKey)
+                                            .build(),
+                                    AsyncResponseTransformer.toBytes()
+                            )
+                    )
+                    .emitOn(runnable -> {
+                        if (requestContext != null) {
+                            requestContext.runOnContext(v -> runnable.run());
+                        } else {
+                            vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
+                        }
+                    })
+                    .map(response -> {
+                        try {
+                            return PipeDoc.parseFrom(response.asByteArray());
+                        } catch (Exception e) {
+                            LOG.errorf(e, "Failed to parse PipeDoc from S3 for doc_id=%s, graph_address_id=%s, account_id=%s", 
+                                    docId, graphAddressId, accountId);
                             return null;
                         }
                     }).onFailure(NoSuchKeyException.class).recoverWithItem((PipeDoc) null);

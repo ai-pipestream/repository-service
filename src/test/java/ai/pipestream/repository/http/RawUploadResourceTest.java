@@ -76,6 +76,7 @@ class RawUploadResourceTest {
                 });
 
         // Verify DB record exists (reactive)
+        // For initial intake, we query by docId alone (assuming initial state where graph_address_id = datasource_id)
         asserter.assertThat(() -> {
             RawUploadReceipt receipt = (RawUploadReceipt) asserter.getData("receipt");
             return Panache.withSession(() ->

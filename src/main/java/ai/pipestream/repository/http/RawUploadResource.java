@@ -10,11 +10,10 @@ import ai.pipestream.repository.account.AccountCacheService;
 import ai.pipestream.repository.entity.PipeDocRecord;
 import ai.pipestream.repository.kafka.RepositoryEventEmitter;
 import ai.pipestream.repository.s3.S3Config;
+import ai.pipestream.repository.util.PipeDocUuidGenerator;
 import io.quarkus.hibernate.reactive.panache.Panache;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
-import io.smallrye.mutiny.vertx.MutinyHelper;
-import io.vertx.core.Context;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.HeaderParam;
@@ -65,6 +64,9 @@ public class RawUploadResource {
 
     @Inject
     io.vertx.mutiny.core.Vertx vertx;
+
+    @Inject
+    PipeDocUuidGenerator uuidGenerator;
 
     /**
      * Raw octet-stream upload (single request).
@@ -192,9 +194,13 @@ public class RawUploadResource {
                         .flatMap(pipeDocResponse -> {
                             
                             // 4. Persist Metadata (Reactive Transaction)
+                            // For initial intake, graph_address_id = datasource_id
                             return Panache.withTransaction(() -> {
                                 PipeDocRecord record = new PipeDocRecord();
+                                // Generate deterministic UUID for node_id using (doc_id, datasource_id, account_id)
+                                record.nodeId = uuidGenerator.generateNodeId(resolvedDocId, datasourceId, accountId);
                                 record.docId = resolvedDocId;
+                                record.graphAddressId = datasourceId; // For initial intake, graph_address_id = datasource_id
                                 record.accountId = accountId;
                                 record.datasourceId = datasourceId;
                                 record.connectorId = connectorId;
