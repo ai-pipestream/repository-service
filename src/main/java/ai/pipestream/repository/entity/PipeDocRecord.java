@@ -42,6 +42,19 @@ public class PipeDocRecord extends PanacheEntityBase {
     @Column(name = "graph_address_id", nullable = false)
     public String graphAddressId;
 
+    /**
+     * Cluster identifier where this document was processed (nullable).
+     * 
+     * - NULL for intake documents (intake documents don't belong to any cluster)
+     * - Set to cluster name for documents processed by a cluster
+     * 
+     * This determines the S3 path structure:
+     * - NULL → {docId}/intake/{uuid}.pb
+     * - Set → {docId}/{clusterId}/{uuid}.pb
+     */
+    @Column(name = "cluster_id")
+    public String clusterId;
+
     @Column(name = "account_id", nullable = false)
     public String accountId;
 

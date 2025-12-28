@@ -73,12 +73,18 @@ The claim-check pattern applies at **two levels**:
 - **Customer-supplied S3**: Customers provide their own bucket and KMS key. Storage costs are theirs, not ours.
 - **Scalability**: S3 is multi-region and scales automatically. PostgreSQL blob storage is expensive and less scalable.
 
-**Database role**: The `pipedocs` table stores metadata (doc_id, checksum, drive_name, object_key, version_id, etag, size, timestamps) for:
+**Database role**: The `pipedocs` table stores metadata (node_id, doc_id, graph_address_id, cluster_id, account_id, datasource_id, connector_id, object_key, version_id, etag, size, timestamps) for:
 - Quick pipeline operations and queries
 - Source of truth for document lifecycle tracking
 - Enabling OpenSearch to index metadata for fast search
 
-**Optional persistence**: For customers who don't want S3 storage (sensitive documents), pure gRPC mode can process documents without persistence. The repository service is entirely optional in the pipeline.
+**S3 Path Structure**: Documents are organized hierarchically to group all states of the same logical document together:
+- **Intake**: `{prefix}/{account}/{connector}/{datasource}/{docId}/intake/{uuid}.pb`
+- **Cluster Processing**: `{prefix}/{account}/{connector}/{datasource}/{docId}/{clusterId}/{uuid}.pb`
+
+This structure enables multi-cluster processing, easy recrawling, and cluster seeding. See [`docs/S3-PATH-STRUCTURE.md`](./docs/S3-PATH-STRUCTURE.md) for detailed documentation.
+
+**Optional persistence**: Documents can flow through the entire pipeline without persistence when using pure gRPC transport (no Kafka edges). Only Kafka edges require `SavePipeDoc` calls, which persist to S3 using the path structure above. The repository service is entirely optional for pure gRPC processing paths.
 
 ### Repository service APIs
 There are multiple service surfaces in the repo protos. Conceptually they converge on one domain operation: **store bytes and store metadata**.
@@ -204,18 +210,23 @@ Notes:
 
 ### Stable identity
 Agreed stable identity for a logical document:
-- `(account_id, connector_id, doc_id)`
+- `(account_id, connector_id, doc_id)` for the logical document
+- `(doc_id, graph_address_id, account_id)` for a specific document state (intake or cluster node)
 
 Notes:
 - Account is tied to connector; we may also represent `(instance_id, connector_id, account)` as a first-class entity.
+- `graph_address_id` is either `datasource_id` (for intake) or `node_id` (for cluster processing)
+- `node_id` (UUID primary key) is deterministic: `UUID(doc_id, graph_address_id, account_id)`
 
 ### Versions
 - `checksum` is the primary content identity for versions.
 - With S3 versioning enabled, `s3_version_id` is recorded and emitted; without it, overwrite semantics apply.
+- Each graph location state gets its own UUID, allowing multiple versions/states of the same logical document to coexist
 
 ### Idempotency rule (agreed direction)
-- If `(account_id, connector_id, doc_id, checksum)` already exists → idempotent success (return existing receipt)
-- If `(account_id, connector_id, doc_id)` exists but checksum differs → create a new version and emit an `Updated` event
+- If `(doc_id, graph_address_id, account_id, checksum)` already exists → idempotent success (return existing node_id)
+- If `(doc_id, graph_address_id, account_id)` exists but checksum differs → create a new version and emit an `Updated` event
+- Different graph locations (different `graph_address_id`) always create separate records, even for the same `doc_id`
 
 ---
 

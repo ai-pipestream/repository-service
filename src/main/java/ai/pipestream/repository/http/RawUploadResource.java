@@ -132,9 +132,18 @@ public class RawUploadResource {
                             ? MediaType.APPLICATION_OCTET_STREAM
                             : contentType;
 
-                    String objectKey = buildObjectKey(resolvedDriveName, accountId, connectorId, resolvedDocId, resolvedFilename);
+                    // Generate deterministic UUID for node_id using (doc_id, datasource_id, account_id)
+                    // This is needed for the new path structure: intake/{uuid}.pb
+                    UUID nodeId = uuidGenerator.generateNodeId(resolvedDocId, datasourceId, accountId);
                     
-                    LOG.infof("Uploading doc_id=%s to s3://%s/%s (bytes=%d)", resolvedDocId, s3Config.bucket(), objectKey, contentLength);
+                    // Build S3 object keys using new path structure:
+                    // Raw blob: {prefix}/{drive}/{account}/{connector}/{datasource}/{docId}/intake/{filename}
+                    // PipeDoc: {prefix}/{drive}/{account}/{connector}/{datasource}/{docId}/intake/{uuid}.pb
+                    String objectKey = buildObjectKeyForIntake(resolvedDriveName, accountId, resolvedConnectorId, datasourceId, resolvedDocId, resolvedFilename);
+                    String pipedocObjectKey = buildObjectKeyBaseForIntake(resolvedDriveName, accountId, resolvedConnectorId, datasourceId, resolvedDocId) + "/" + nodeId.toString() + ".pb";
+                    
+                    LOG.infof("Uploading doc_id=%s to s3://%s/%s (bytes=%d), PipeDoc will be at %s", 
+                            resolvedDocId, s3Config.bucket(), objectKey, contentLength, pipedocObjectKey);
 
                     // 2. Upload Raw File to S3 (Streamed Async)
                     // We use the Worker Pool executor to read from the blocking InputStream
@@ -168,8 +177,8 @@ public class RawUploadResource {
                                 contentLength,
                                 resolvedChecksum
                         );
-
-                        String pipedocObjectKey = objectKey + ".pipedoc";
+                        
+                        // PipeDoc object key is already set above using new path structure
                         byte[] pipeDocBytes = pipeDoc.toByteArray();
 
                         // 3. Store PipeDoc protobuf to S3 (Async, Memory-based)
@@ -194,19 +203,19 @@ public class RawUploadResource {
                         .flatMap(pipeDocResponse -> {
                             
                             // 4. Persist Metadata (Reactive Transaction)
-                            // For initial intake, graph_address_id = datasource_id
+                            // For initial intake, graph_address_id = datasource_id, cluster_id = null
                             return Panache.withTransaction(() -> {
                                 PipeDocRecord record = new PipeDocRecord();
-                                // Generate deterministic UUID for node_id using (doc_id, datasource_id, account_id)
-                                record.nodeId = uuidGenerator.generateNodeId(resolvedDocId, datasourceId, accountId);
+                                record.nodeId = nodeId; // UUID already generated above
                                 record.docId = resolvedDocId;
                                 record.graphAddressId = datasourceId; // For initial intake, graph_address_id = datasource_id
+                                record.clusterId = null; // Intake documents don't belong to a cluster
                                 record.accountId = accountId;
                                 record.datasourceId = datasourceId;
-                                record.connectorId = connectorId;
+                                record.connectorId = resolvedConnectorId;
                                 record.driveName = resolvedDriveName;
-                                record.objectKey = objectKey;
-                                record.pipedocObjectKey = pipedocObjectKey;
+                                record.objectKey = objectKey; // Raw blob path
+                                record.pipedocObjectKey = pipedocObjectKey; // PipeDoc path with new structure
                                 record.versionId = versionId;
                                 record.etag = etag;
                                 record.sizeBytes = contentLength;
@@ -314,20 +323,35 @@ public class RawUploadResource {
         }
     }
 
-    private String buildObjectKey(String driveName, String accountId, String connectorId, String docId, String filename) {
+    /**
+     * Builds the base path for intake documents: {prefix}/{drive}/{account}/{connector}/{datasource}/{docId}/intake
+     * Used for constructing both raw blob and PipeDoc paths.
+     */
+    private String buildObjectKeyBaseForIntake(String driveName, String accountId, String connectorId, String datasourceId, String docId) {
         String safeDrive = sanitizePathSegment(driveName);
         String safeAccount = sanitizePathSegment(accountId);
         String safeConnector = sanitizePathSegment(connectorId);
+        String safeDatasource = sanitizePathSegment(datasourceId);
         String safeDoc = sanitizePathSegment(docId);
-        String safeName = sanitizeFilename(filename);
+        
         return String.join("/",
                 sanitizePathSegment(s3Config.keyPrefix()),
                 safeDrive,
                 safeAccount,
                 safeConnector,
+                safeDatasource,
                 safeDoc,
-                safeName
+                "intake"
         );
+    }
+    
+    /**
+     * Builds S3 object key for raw blob in intake: {prefix}/{drive}/{account}/{connector}/{datasource}/{docId}/intake/{filename}
+     */
+    private String buildObjectKeyForIntake(String driveName, String accountId, String connectorId, String datasourceId, String docId, String filename) {
+        String basePath = buildObjectKeyBaseForIntake(driveName, accountId, connectorId, datasourceId, docId);
+        String safeName = sanitizeFilename(filename);
+        return basePath + "/" + safeName;
     }
 
     private static String sanitizePathSegment(String value) {

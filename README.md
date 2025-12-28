@@ -9,6 +9,8 @@ It provides:
 
 For the full architecture and decisions, see [`DESIGN.md`](./DESIGN.md).
 
+For details on S3 path structure and document lifecycle organization, see [`docs/S3-PATH-STRUCTURE.md`](./docs/S3-PATH-STRUCTURE.md).
+
 ### Key concepts
 - **PipeDoc**: the primary pipeline document container.
 - **Claim-check pattern**: large payloads stored externally; protobuf carries a reference.

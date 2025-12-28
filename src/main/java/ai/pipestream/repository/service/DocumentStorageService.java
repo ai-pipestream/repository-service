@@ -75,7 +75,7 @@ public class DocumentStorageService {
      * @return Uni containing storage result containing the resolved document id and S3 key
      */
     public Uni<StoredDocument> store(PipeDoc document) {
-        return store(document, null, null);
+        return store(document, null, null, null);
     }
 
     /**
@@ -88,18 +88,19 @@ public class DocumentStorageService {
      * @return Uni containing storage result
      */
     public Uni<StoredDocument> store(PipeDoc document, String requestId) {
-        return store(document, requestId, null);
+        return store(document, requestId, null, null);
     }
 
     /**
-     * Store a {@link PipeDoc} with a specific request ID and graph location ID.
+     * Store a {@link PipeDoc} with a specific request ID, graph location ID, and cluster ID.
      *
      * @param document the document to store
      * @param requestId optional request ID for tracing (auto-generated if null)
      * @param graphLocationId optional graph location ID (if null, uses datasource_id from ownership)
+     * @param clusterId optional cluster ID (null for intake, set for cluster processing)
      * @return Uni containing storage result
      */
-    public Uni<StoredDocument> store(PipeDoc document, String requestId, String graphLocationId) {
+    public Uni<StoredDocument> store(PipeDoc document, String requestId, String graphLocationId, String clusterId) {
         if (document == null) {
             return Uni.createFrom().failure(new IllegalArgumentException("document must not be null"));
         }
@@ -155,12 +156,13 @@ public class DocumentStorageService {
                                                 "Invalid graph_location_id: " + graphLocationId));
                                     }
                                     return continueStoring(docToStore, finalDocId, accountId, connectorId, finalDatasourceId,
-                                            resolvedRequestId, graphLocationId);
+                                            resolvedRequestId, graphLocationId, clusterId);
                                 });
                     } else {
                         // Use datasource_id as graph_address_id (for initial intake)
+                        // clusterId should be null for intake
                         return continueStoring(docToStore, finalDocId, accountId, connectorId, finalDatasourceId,
-                                resolvedRequestId, finalDatasourceId);
+                                resolvedRequestId, finalDatasourceId, null);
                     }
                 });
     }
@@ -169,26 +171,33 @@ public class DocumentStorageService {
      * Continues the storage process after graph address ID is resolved.
      */
     private Uni<StoredDocument> continueStoring(PipeDoc docToStore, String finalDocId, String accountId, 
-            String connectorId, String finalDatasourceId, String resolvedRequestId, String resolvedGraphAddressId) {
+            String connectorId, String finalDatasourceId, String resolvedRequestId, String resolvedGraphAddressId, String clusterId) {
         Context requestContext = Vertx.currentContext().getDelegate();
         
         String driveName = "default";
-        String objectKey = buildObjectKey(driveName, accountId, connectorId, finalDocId);
-
+        
         byte[] pipeDocBytes = docToStore.toByteArray();
         String contentType = "application/x-protobuf";
         long sizeBytes = pipeDocBytes.length;
         String checksum = computeSha256(pipeDocBytes);
 
-        LOG.infof("Storing PipeDoc doc_id=%s, graph_address_id=%s to s3://%s/%s (bytes=%d)",
-                finalDocId, resolvedGraphAddressId, s3Config.bucket(), objectKey, sizeBytes);
+        // 2. Generate deterministic UUID for node_id using (doc_id, graph_address_id, account_id)
+        UUID nodeId = uuidGenerator.generateNodeId(finalDocId, resolvedGraphAddressId, accountId);
+        
+        // 3. Build complete S3 object key with UUID filename
+        String basePath = buildObjectKeyBase(driveName, accountId, connectorId, finalDatasourceId, finalDocId, clusterId);
+        String completeObjectKey = basePath + "/" + nodeId.toString() + ".pb";
+        
+        LOG.infof("Storing PipeDoc doc_id=%s, graph_address_id=%s, cluster_id=%s to s3://%s/%s (bytes=%d)",
+                finalDocId, resolvedGraphAddressId, clusterId != null ? clusterId : "intake", 
+                s3Config.bucket(), completeObjectKey, sizeBytes);
 
-        // 2. Store to S3
+        // 4. Store to S3
         return Uni.createFrom().completionStage(
                 s3AsyncClient.putObject(
                         PutObjectRequest.builder()
                                 .bucket(s3Config.bucket())
-                                .key(objectKey)
+                                .key(completeObjectKey)
                                 .contentType(contentType)
                                 .contentLength(sizeBytes)
                                 .build(),
@@ -207,18 +216,16 @@ public class DocumentStorageService {
             String etag = putResponse.eTag();
             String versionId = putResponse.versionId();
 
-            // 3. Generate deterministic UUID for node_id using (doc_id, graph_address_id, account_id)
-            UUID nodeId = uuidGenerator.generateNodeId(finalDocId, resolvedGraphAddressId, accountId);
-            
-            // 4. Persist to DB (Reactive Transaction with UPSERT pattern)
+            // 5. Persist to DB (Reactive Transaction with UPSERT pattern)
             return Panache.withTransaction(() -> 
                 PipeDocRecord.<PipeDocRecord>findById(nodeId)
                         .flatMap(existingRecord -> {
                             if (existingRecord != null) {
                                 // UPDATE existing record (new version)
                                 LOG.debugf("Updating existing PipeDocRecord: node_id=%s", nodeId);
-                                existingRecord.objectKey = objectKey;
-                                existingRecord.pipedocObjectKey = objectKey;
+                                existingRecord.objectKey = completeObjectKey;
+                                existingRecord.pipedocObjectKey = completeObjectKey;
+                                existingRecord.clusterId = clusterId; // Update cluster_id if changed
                                 existingRecord.versionId = versionId;
                                 existingRecord.etag = etag;
                                 existingRecord.sizeBytes = sizeBytes;
@@ -233,29 +240,30 @@ public class DocumentStorageService {
                                 record.nodeId = nodeId;
                                 record.docId = finalDocId;
                                 record.graphAddressId = resolvedGraphAddressId;
+                                record.clusterId = clusterId; // NULL for intake, cluster name for processing
                                 record.accountId = accountId;
                                 record.datasourceId = finalDatasourceId;
                                 record.connectorId = connectorId;
                                 record.driveName = driveName;
-                                record.objectKey = objectKey;
-                                record.pipedocObjectKey = objectKey;
+                                record.objectKey = completeObjectKey;
+                                record.pipedocObjectKey = completeObjectKey;
                                 record.versionId = versionId;
                                 record.etag = etag;
                                 record.sizeBytes = sizeBytes;
                                 record.contentType = contentType;
-                                record.filename = finalDocId + ".pb";
+                                record.filename = nodeId.toString() + ".pb";
                                 record.checksum = checksum == null ? "" : checksum;
                                 record.createdAt = Instant.now();
                                 return record.persist();
                             }
                         })
             ).map(persisted -> {
-                // 5. Emit Event
+                // 6. Emit Event
                 eventEmitter.emitCreated(
                         finalDocId,
                         accountId,
-                        objectKey,
-                        objectKey,
+                        completeObjectKey,
+                        completeObjectKey,
                         sizeBytes,
                         checksum,
                         s3Config.bucket(),
@@ -265,7 +273,7 @@ public class DocumentStorageService {
                 );
 
                 // Return node_id (UUID) as the repository identifier
-                return new StoredDocument(nodeId.toString(), objectKey, versionId, etag, sizeBytes, checksum);
+                return new StoredDocument(nodeId.toString(), completeObjectKey, versionId, etag, sizeBytes, checksum);
             });
         });
     }
@@ -383,19 +391,38 @@ public class DocumentStorageService {
                 });
     }
 
-    private String buildObjectKey(String driveName, String accountId, String connectorId, String docId) {
+
+    /**
+     * Builds the S3 object key base path for a PipeDoc (without UUID filename).
+     * 
+     * Path structure:
+     * - Intake: {prefix}/{account}/{connector}/{datasource}/{docId}/intake
+     * - Cluster: {prefix}/{account}/{connector}/{datasource}/{docId}/{clusterId}
+     * 
+     * The UUID filename will be appended by the caller: basePath + "/" + uuid + ".pb"
+     */
+    private String buildObjectKeyBase(String driveName, String accountId, String connectorId, String datasourceId, String docId, String clusterId) {
         String safeDrive = sanitize(driveName);
         String safeAccount = sanitize(accountId);
         String safeConnector = sanitize(connectorId);
+        String safeDatasource = sanitize(datasourceId);
         String safeDoc = sanitize(docId);
-        return String.join("/",
+        
+        String basePath = String.join("/",
                 sanitize(s3Config.keyPrefix()),
                 safeDrive,
                 safeAccount,
                 safeConnector,
-                safeDoc,
-                safeDoc + ".pb"
+                safeDatasource,
+                safeDoc
         );
+        
+        // Add subdirectory: "intake" for intake, clusterId for cluster processing
+        if (clusterId == null || clusterId.isBlank()) {
+            return basePath + "/intake";
+        } else {
+            return basePath + "/" + sanitize(clusterId);
+        }
     }
 
     private static String sanitize(String value) {

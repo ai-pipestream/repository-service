@@ -74,8 +74,12 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
             LOG.debugf("No graph_address specified, defaulting to datasource_id from PipeDoc ownership");
         }
         
+        // Extract cluster_id (optional - null for intake, set for cluster processing)
+        String clusterId = request.hasClusterId() ? request.getClusterId() : null;
+        LOG.debugf("Using cluster_id: %s", clusterId != null ? clusterId : "null (intake)");
+        
         // Use DocumentStorageService to store the document
-        return storageService.store(docToSave, null, graphLocationId)
+        return storageService.store(docToSave, null, graphLocationId, clusterId)
                 .map(stored -> SavePipeDocResponse.newBuilder()
                         .setNodeId(stored.documentId())
                         .setDrive(request.getDrive())
@@ -206,5 +210,64 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
         // TODO: Implement listPipeDocs
         LOG.warnf("listPipeDocs not yet implemented");
         return Uni.createFrom().failure(new UnsupportedOperationException("listPipeDocs not yet implemented"));
+    }
+
+    @Override
+    public Uni<GetBlobResponse> getBlob(GetBlobRequest request) {
+        if (!request.hasStorageRef()) {
+            return Uni.createFrom().failure(new IllegalArgumentException("FileStorageReference is required"));
+        }
+
+        ai.pipestream.data.v1.FileStorageReference storageRef = request.getStorageRef();
+        String objectKey = storageRef.getObjectKey();
+        String driveName = storageRef.getDriveName();
+
+        if (objectKey == null || objectKey.isEmpty()) {
+            return Uni.createFrom().failure(new IllegalArgumentException("FileStorageReference.object_key is required"));
+        }
+        if (driveName == null || driveName.isEmpty()) {
+            return Uni.createFrom().failure(new IllegalArgumentException("FileStorageReference.drive_name is required"));
+        }
+
+        LOG.debugf("Fetching blob from S3: drive=%s, object_key=%s", driveName, objectKey);
+
+        // Build S3 GetObjectRequest - include version_id if provided
+        GetObjectRequest.Builder requestBuilder = GetObjectRequest.builder()
+                .bucket(s3Config.bucket())
+                .key(objectKey);
+
+        if (storageRef.hasVersionId() && !storageRef.getVersionId().isEmpty()) {
+            requestBuilder.versionId(storageRef.getVersionId());
+        }
+
+        // Fetch blob bytes from S3 (matches pattern from GetPipeDocByReference - no emitOn, direct S3 access)
+        return Uni.createFrom().completionStage(
+                s3AsyncClient.getObject(requestBuilder.build(), AsyncResponseTransformer.toBytes())
+        )
+        .map(response -> {
+            byte[] blobData = response.asByteArray();
+            long sizeBytes = blobData.length;
+            String contentType = response.contentType();
+
+            LOG.debugf("Retrieved blob from S3: object_key=%s, size_bytes=%d, content_type=%s", 
+                    objectKey, sizeBytes, contentType);
+
+            GetBlobResponse.Builder responseBuilder = GetBlobResponse.newBuilder()
+                    .setData(com.google.protobuf.ByteString.copyFrom(blobData))
+                    .setSizeBytes(sizeBytes)
+                    .setRetrievedAtEpochMs(System.currentTimeMillis());
+
+            if (contentType != null && !contentType.isEmpty()) {
+                responseBuilder.setMimeType(contentType);
+            }
+
+            return responseBuilder.build();
+        })
+        .onFailure(NoSuchKeyException.class).recoverWithUni(throwable -> {
+            LOG.errorf(throwable, "S3 blob not found: object_key=%s, drive=%s", objectKey, driveName);
+            return Uni.createFrom().failure(new RuntimeException("Blob not found in storage"));
+        })
+        .onFailure().invoke(throwable -> LOG.errorf(throwable, 
+                "Failed to get blob: object_key=%s, drive=%s", objectKey, driveName));
     }
 }
