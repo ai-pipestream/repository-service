@@ -247,7 +247,8 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
         .map(response -> {
             byte[] blobData = response.asByteArray();
             long sizeBytes = blobData.length;
-            String contentType = response.contentType();
+            // Access content type from the underlying GetObjectResponse
+            String contentType = response.response().contentType();
 
             LOG.debugf("Retrieved blob from S3: object_key=%s, size_bytes=%d, content_type=%s", 
                     objectKey, sizeBytes, contentType);

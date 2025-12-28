@@ -136,14 +136,19 @@ public class RawUploadResource {
                     // This is needed for the new path structure: intake/{uuid}.pb
                     UUID nodeId = uuidGenerator.generateNodeId(resolvedDocId, datasourceId, accountId);
                     
-                    // Build S3 object keys using new path structure:
-                    // Raw blob: {prefix}/{drive}/{account}/{connector}/{datasource}/{docId}/intake/{filename}
-                    // PipeDoc: {prefix}/{drive}/{account}/{connector}/{datasource}/{docId}/intake/{uuid}.pb
-                    String objectKey = buildObjectKeyForIntake(resolvedDriveName, accountId, resolvedConnectorId, datasourceId, resolvedDocId, resolvedFilename);
-                    String pipedocObjectKey = buildObjectKeyBaseForIntake(resolvedDriveName, accountId, resolvedConnectorId, datasourceId, resolvedDocId) + "/" + nodeId.toString() + ".pb";
+                    // Generate UUID for blob filename (using blob_id from Blob proto)
+                    // Blobs are stored with UUID-based filenames to avoid filename collisions and OS-specific issues
+                    UUID blobId = UUID.randomUUID();
                     
-                    LOG.infof("Uploading doc_id=%s to s3://%s/%s (bytes=%d), PipeDoc will be at %s", 
-                            resolvedDocId, s3Config.bucket(), objectKey, contentLength, pipedocObjectKey);
+                    // Build S3 object keys using new path structure:
+                    // Raw blob: {prefix}/{drive}/{account}/{connector}/{datasource}/{docId}/intake/{blob-uuid}.bin
+                    // PipeDoc: {prefix}/{drive}/{account}/{connector}/{datasource}/{docId}/intake/{node-uuid}.pb
+                    String basePath = buildObjectKeyBaseForIntake(resolvedDriveName, accountId, resolvedConnectorId, datasourceId, resolvedDocId);
+                    String blobObjectKey = basePath + "/" + blobId.toString() + ".bin";  // Use UUID for blob filename
+                    String pipedocObjectKey = basePath + "/" + nodeId.toString() + ".pb";
+                    
+                    LOG.infof("Uploading doc_id=%s, blob_id=%s to s3://%s/%s (bytes=%d), PipeDoc will be at %s", 
+                            resolvedDocId, blobId, s3Config.bucket(), blobObjectKey, contentLength, pipedocObjectKey);
 
                     // 2. Upload Raw File to S3 (Streamed Async)
                     // We use the Worker Pool executor to read from the blocking InputStream
@@ -153,7 +158,7 @@ public class RawUploadResource {
                             s3AsyncClient.putObject(
                                     PutObjectRequest.builder()
                                             .bucket(s3Config.bucket())
-                                            .key(objectKey)
+                                            .key(blobObjectKey)
                                             .contentType(resolvedContentType)
                                             .contentLength(contentLength)
                                             .build(),
@@ -170,10 +175,11 @@ public class RawUploadResource {
                                 datasourceId,
                                 resolvedConnectorId,
                                 resolvedDriveName,
-                                objectKey,
+                                blobObjectKey,
+                                blobId.toString(),  // Pass blob_id so it's used consistently
                                 versionId,
                                 resolvedContentType,
-                                resolvedFilename,
+                                resolvedFilename,  // Original filename stored as metadata
                                 contentLength,
                                 resolvedChecksum
                         );
@@ -214,7 +220,7 @@ public class RawUploadResource {
                                 record.datasourceId = datasourceId;
                                 record.connectorId = resolvedConnectorId;
                                 record.driveName = resolvedDriveName;
-                                record.objectKey = objectKey; // Raw blob path
+                                record.objectKey = blobObjectKey; // Raw blob path with UUID filename
                                 record.pipedocObjectKey = pipedocObjectKey; // PipeDoc path with new structure
                                 record.versionId = versionId;
                                 record.etag = etag;
@@ -228,10 +234,10 @@ public class RawUploadResource {
                         }).map(persisted -> {
                             // 5. Emit Event
                             eventEmitter.emitCreated(
-                                    resolvedDocId,
-                                    accountId,
-                                    objectKey,
-                                    pipedocObjectKey,
+                                resolvedDocId,
+                                accountId,
+                                blobObjectKey,
+                                pipedocObjectKey,
                                     contentLength,
                                     resolvedChecksum,
                                     s3Config.bucket(),
@@ -244,12 +250,12 @@ public class RawUploadResource {
                                     resolvedDocId,
                                     resolvedChecksum,
                                     resolvedDriveName,
-                                    objectKey,
+                                    blobObjectKey,  // Use blobObjectKey (UUID-based path)
                                     versionId,
                                     etag,
                                     contentLength,
                                     resolvedContentType,
-                                    resolvedFilename,
+                                    resolvedFilename,  // Original filename preserved in receipt and blob metadata
                                     "STORED_PIPEDOC"
                             );
                         });
@@ -262,10 +268,11 @@ public class RawUploadResource {
                                                   String datasourceId,
                                                   String connectorId,
                                                   String driveName,
-                                                  String objectKey,
+                                                  String objectKey,  // S3 object key (UUID-based path)
+                                                  String blobId,  // UUID for blob_id field in Blob proto
                                                   String versionId,
                                                   String contentType,
-                                                  String filename,
+                                                  String filename,  // Original filename (stored as metadata in blob.filename)
                                                   long sizeBytes,
                                                   String checksumSha256) {
         FileStorageReference.Builder ref = FileStorageReference.newBuilder()
@@ -276,9 +283,9 @@ public class RawUploadResource {
         }
 
         Blob.Builder blob = Blob.newBuilder()
-                .setBlobId(UUID.randomUUID().toString())
+                .setBlobId(blobId)  // Use the provided blob_id (UUID) - matches the UUID used in S3 filename
                 .setDriveId(driveName)
-                .setStorageRef(ref)
+                .setStorageRef(ref)  // Points to S3 object key (UUID-based path)
                 .setSizeBytes(sizeBytes);
 
         if (contentType != null && !contentType.isBlank()) {
@@ -345,14 +352,6 @@ public class RawUploadResource {
         );
     }
     
-    /**
-     * Builds S3 object key for raw blob in intake: {prefix}/{drive}/{account}/{connector}/{datasource}/{docId}/intake/{filename}
-     */
-    private String buildObjectKeyForIntake(String driveName, String accountId, String connectorId, String datasourceId, String docId, String filename) {
-        String basePath = buildObjectKeyBaseForIntake(driveName, accountId, connectorId, datasourceId, docId);
-        String safeName = sanitizeFilename(filename);
-        return basePath + "/" + safeName;
-    }
 
     private static String sanitizePathSegment(String value) {
         if (value == null) return "unknown";

@@ -129,9 +129,11 @@ We support three upload modes. They should share the same internal conceptual st
 - Still integrates with the same metadata and event flow.
 
 ### Raw-file vs protobuf-file storage
-- HTTP uploads store the raw bytes “as-is” (not protobuf).
-- The corresponding `PipeDoc` references the raw file via `Blob.storage_ref`.
-- Parser modules can hydrate the raw bytes on demand.
+- HTTP uploads store the raw bytes "as-is" (not protobuf).
+- Blobs are stored with **UUID-based filenames** (e.g., `{blob-uuid}.bin`) to avoid filename collisions and OS-specific issues.
+- The original filename is preserved in `Blob.filename` metadata field.
+- The corresponding `PipeDoc` references the raw file via `Blob.storage_ref` pointing to the UUID-named blob file.
+- Parser modules can hydrate the raw bytes on demand using the `storage_ref`.
 
 ---
 

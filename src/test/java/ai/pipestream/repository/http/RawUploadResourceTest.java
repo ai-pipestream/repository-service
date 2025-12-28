@@ -91,8 +91,25 @@ class RawUploadResourceTest {
             assertEquals("conn-1", record.connectorId);
             assertNotNull(record.datasourceId);
             assertFalse(record.datasourceId.isBlank());
+            // For initial intake, clusterId should be null
+            assertNull(record.clusterId);
+            // graph_address_id should be datasource_id for intake
+            assertEquals(record.datasourceId, record.graphAddressId);
+            // pipedocObjectKey should follow new path structure: .../intake/{uuid}.pb
             assertNotNull(record.pipedocObjectKey);
-            assertEquals(receipt.objectKey() + ".pipedoc", record.pipedocObjectKey);
+            assertTrue(record.pipedocObjectKey.contains("/intake/"));
+            assertTrue(record.pipedocObjectKey.endsWith(".pb"));
+            // Verify it contains the datasource_id in the path
+            assertTrue(record.pipedocObjectKey.contains(record.datasourceId));
+            
+            // objectKey should be UUID-based blob filename: .../intake/{blob-uuid}.bin
+            assertNotNull(record.objectKey);
+            assertTrue(record.objectKey.contains("/intake/"));
+            assertTrue(record.objectKey.endsWith(".bin"));  // Blob files use .bin extension
+            // Verify it's a UUID-based filename (UUID format: 8-4-4-4-12 hex chars)
+            String blobFilename = record.objectKey.substring(record.objectKey.lastIndexOf("/") + 1);
+            String blobUuidPart = blobFilename.substring(0, blobFilename.lastIndexOf("."));
+            assertTrue(blobUuidPart.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"));
 
             asserter.putData("objectKey", record.objectKey);
             asserter.putData("pipedocObjectKey", record.pipedocObjectKey);

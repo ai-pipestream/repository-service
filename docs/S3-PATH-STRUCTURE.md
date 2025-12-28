@@ -27,14 +27,22 @@ The S3 path structure is organized hierarchically to group all states of a docum
 
 ### Intake Path
 - `intake/`: Subdirectory for initial intake documents
-- `{uuid}.pb`: UUID-based filename for the intake PipeDoc protobuf
+- `{blob-uuid}.bin`: UUID-based filename for raw blob files (e.g., PDF, Word doc, images)
+  - UUID is randomly generated per blob
+  - Original filename is preserved in `Blob.filename` metadata field
+  - Used to avoid filename collisions and OS-specific issues
+- `{node-uuid}.pb`: UUID-based filename for the intake PipeDoc protobuf
   - UUID is deterministic: `UUID(doc_id, datasource_id, account_id)`
   - `graph_address_id` in DB record = `datasource_id`
   - `cluster_id` in DB record = `NULL`
+  - PipeDoc's `BlobBag` contains `Blob` objects with `storage_ref` pointing to the blob files
 
 **Example:**
 ```
-uploads/account123/connector456/datasource789/doc-abc/intake/a1b2c3d4-e5f6-7890-abcd-ef1234567890.pb
+uploads/account123/connector456/datasource789/doc-abc/intake/
+  ├── b1c2d3e4-f5a6-7890-bcde-f12345678901.bin  (raw blob file)
+  ├── c2d3e4f5-a6b7-8901-cdef-123456789012.bin  (attachment/blob 2)
+  └── a1b2c3d4-e5f6-7890-abcd-ef1234567890.pb   (PipeDoc with BlobBag referencing the .bin files)
 ```
 
 ### Cluster Processing Path
@@ -57,14 +65,23 @@ uploads/account123/connector456/datasource789/doc-abc/cluster-staging/d4e5f6a7-b
 
 When a document first enters the system via a datasource:
 
-1. Document is ingested (HTTP upload, connector intake, etc.)
-2. PipeDoc is created with `graph_address_id = datasource_id`
-3. Stored at: `{prefix}/{account}/{connector}/{datasource}/{docId}/intake/{uuid}.pb`
-4. Database record created:
+1. Document is ingested (HTTP upload via `RawUploadResource`, connector intake, etc.)
+2. **Raw blob file(s)** stored to S3 with UUID-based filenames: `{prefix}/{account}/{connector}/{datasource}/{docId}/intake/{blob-uuid}.bin`
+   - Original filename preserved in `Blob.filename` metadata field
+   - Multiple blobs (e.g., Confluence post with attachments) each get their own UUID-named file
+3. **PipeDoc** created with `BlobBag` containing `Blob` objects with `storage_ref` pointing to the blob files
+4. PipeDoc stored at: `{prefix}/{account}/{connector}/{datasource}/{docId}/intake/{node-uuid}.pb`
+5. Database record created:
    - `graph_address_id = datasource_id`
    - `cluster_id = NULL`
+   - `objectKey` = blob file path (UUID-based)
+   - `pipedocObjectKey` = PipeDoc protobuf path
 
-**Key Point:** There is exactly **one intake record per `doc_id`** per datasource. The UUID ensures uniqueness even if the same logical document is ingested multiple times (idempotency is handled via checksum).
+**Key Points:**
+- There is exactly **one intake record per `doc_id`** per datasource
+- Blobs use UUID filenames to avoid collisions and OS-specific issues
+- Original filenames are preserved in blob metadata, not in S3 paths
+- PipeDoc protobuf contains references to blob files, not the blob data itself (claim-check pattern)
 
 ### 2. Cluster Processing (Multiple Clusters Possible)
 
