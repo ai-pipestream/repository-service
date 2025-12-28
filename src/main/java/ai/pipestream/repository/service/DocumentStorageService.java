@@ -147,12 +147,12 @@ public class DocumentStorageService {
 
                     // Determine graph_address_id: use provided graphLocationId, or fallback to datasource_id
                     if (graphLocationId != null && !graphLocationId.isBlank()) {
-                        // Validate graph location ID against graph service
-                        return graphValidationService.validateGraphLocation(graphLocationId, accountId)
+                        // Validate graph location ID against graph service (topology correctness check)
+                        return graphValidationService.validateGraphLocation(graphLocationId)
                                 .flatMap(isGraphLocationValid -> {
                                     if (!isGraphLocationValid) {
                                         return Uni.createFrom().failure(new IllegalArgumentException(
-                                                "Invalid graph_location_id: " + graphLocationId + " for account: " + accountId));
+                                                "Invalid graph_location_id: " + graphLocationId));
                                     }
                                     return continueStoring(docToStore, finalDocId, accountId, connectorId, finalDatasourceId,
                                             resolvedRequestId, graphLocationId);
