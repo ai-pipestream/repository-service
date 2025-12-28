@@ -18,3 +18,4 @@ CREATE INDEX idx_pipedocs_doc_id_cluster_id ON pipedocs (doc_id, cluster_id);
 -- Note: Existing records will have cluster_id = NULL (they're all intake documents from before this migration)
 -- This is correct - they should be in the intake/ subdirectory
 
+
