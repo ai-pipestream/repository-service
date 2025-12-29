@@ -19,3 +19,4 @@ CREATE INDEX idx_pipedocs_doc_id_cluster_id ON pipedocs (doc_id, cluster_id);
 -- This is correct - they should be in the intake/ subdirectory
 
 
+
