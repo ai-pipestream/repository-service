@@ -573,10 +573,10 @@ public class DocumentStorageService {
         // Fetch paginated results
         int pageSize = criteria.pageSize() > 0 ? criteria.pageSize() : 20;
         int page = criteria.page() > 0 ? criteria.page() : 1;
-        int offset = (page - 1) * pageSize;
 
+        // Note: Panache page() uses 0-based indexing, so we need page - 1
         Uni<java.util.List<PipeDocRecord>> resultsUni = PipeDocRecord.<PipeDocRecord>find(query + orderBy, params.toArray())
-                .page(offset / pageSize, pageSize)
+                .page(page - 1, pageSize)
                 .list();
 
         // Combine count and results
