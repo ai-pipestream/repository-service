@@ -39,6 +39,10 @@ import java.util.UUID;
 public class DocumentStorageService {
 
     private static final Logger LOG = Logger.getLogger(DocumentStorageService.class);
+    private static final int MAX_PAGE_SIZE = 1000;
+    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final String DEFAULT_QUERY_CONDITION = "1=1";
+    private static final String DEFAULT_ORDER_BY = " order by createdAt desc";
 
     @Inject
     S3AsyncClient s3AsyncClient;
@@ -464,6 +468,211 @@ public class DocumentStorageService {
             long sizeBytes,
             String checksum
     ) {}
+
+    /**
+     * Find a document by its document ID (doc_id).
+     * Returns all PipeDocRecords with the given doc_id.
+     *
+     * @param docId the document ID to search for
+     * @return Uni containing list of PipeDocRecords with the given doc_id
+     */
+    public Uni<java.util.List<PipeDocRecord>> findDocumentById(String docId) {
+        if (docId == null || docId.isBlank()) {
+            return Uni.createFrom().failure(new DocumentNotFoundException("Document ID must not be null or blank"));
+        }
+
+        LOG.debugf("Finding documents by doc_id: %s", docId);
+
+        return PipeDocRecord.<PipeDocRecord>find("docId", docId).list()
+                .onFailure().transform(throwable -> {
+                    LOG.errorf(throwable, "Failed to find documents by doc_id: %s", docId);
+                    return new DocumentQueryException("Failed to query documents by ID", throwable);
+                });
+    }
+
+    /**
+     * Find documents by various criteria with pagination support.
+     *
+     * @param criteria the search criteria
+     * @return Uni containing paginated list of PipeDocRecords matching the criteria
+     */
+    public Uni<DocumentSearchResult> findDocumentsByCriteria(DocumentSearchCriteria criteria) {
+        if (criteria == null) {
+            return Uni.createFrom().failure(new IllegalArgumentException("Search criteria must not be null"));
+        }
+
+        LOG.debugf("Finding documents by criteria: %s", criteria);
+
+        // Build query dynamically based on criteria
+        StringBuilder queryBuilder = new StringBuilder();
+        java.util.List<Object> params = new java.util.ArrayList<>();
+        int paramIndex = 1;
+
+        // Add datasourceId filter (source)
+        if (isValidFilterValue(criteria.datasourceId())) {
+            queryBuilder.append("datasourceId = ?").append(paramIndex++);
+            params.add(criteria.datasourceId());
+        }
+
+        // Add accountId filter
+        if (isValidFilterValue(criteria.accountId())) {
+            if (!queryBuilder.isEmpty()) {
+                queryBuilder.append(" and ");
+            }
+            queryBuilder.append("accountId = ?").append(paramIndex++);
+            params.add(criteria.accountId());
+        }
+
+        // Add connectorId filter
+        if (isValidFilterValue(criteria.connectorId())) {
+            if (!queryBuilder.isEmpty()) {
+                queryBuilder.append(" and ");
+            }
+            queryBuilder.append("connectorId = ?").append(paramIndex++);
+            params.add(criteria.connectorId());
+        }
+
+        // Add clusterId filter (can be used as a proxy for status: null=intake, value=processed)
+        if (criteria.clusterId() != null) {
+            if (!queryBuilder.isEmpty()) {
+                queryBuilder.append(" and ");
+            }
+            if (criteria.clusterId().isBlank()) {
+                // Empty string means filter for null cluster_id (intake documents)
+                queryBuilder.append("clusterId is null");
+            } else {
+                queryBuilder.append("clusterId = ?").append(paramIndex++);
+                params.add(criteria.clusterId());
+            }
+        }
+
+        // Add date range filters
+        if (criteria.createdAfter() != null) {
+            if (!queryBuilder.isEmpty()) {
+                queryBuilder.append(" and ");
+            }
+            queryBuilder.append("createdAt >= ?").append(paramIndex++);
+            params.add(criteria.createdAfter());
+        }
+
+        if (criteria.createdBefore() != null) {
+            if (!queryBuilder.isEmpty()) {
+                queryBuilder.append(" and ");
+            }
+            queryBuilder.append("createdAt <= ?").append(paramIndex++);
+            params.add(criteria.createdBefore());
+        }
+
+        // Default to selecting all if no criteria provided
+        boolean hasFilters = !queryBuilder.isEmpty();
+        String query = hasFilters ? queryBuilder.toString() : DEFAULT_QUERY_CONDITION;
+        
+        // Log warning if no filters provided to avoid accidental full table scan
+        if (!hasFilters) {
+            LOG.warnf("findDocumentsByCriteria called with no filter criteria - this will return all documents");
+        }
+        
+        // Add ordering
+        String orderBy = DEFAULT_ORDER_BY;
+
+        LOG.debugf("Executing query: %s with %d parameters", query, params.size());
+
+        // Count total matching records
+        Uni<Long> countUni = PipeDocRecord.count(query, params.toArray());
+
+        // Fetch paginated results
+        int pageSize = criteria.pageSize();
+        int page = criteria.page();
+        int zeroBasedPage = page - 1; // Panache uses 0-based page indexing
+
+        Uni<java.util.List<PipeDocRecord>> resultsUni = PipeDocRecord.<PipeDocRecord>find(query + orderBy, params.toArray())
+                .page(zeroBasedPage, pageSize)
+                .list();
+
+        // Combine count and results
+        return Uni.combine().all().unis(countUni, resultsUni)
+                .asTuple()
+                .map(tuple -> {
+                    Long totalCount = tuple.getItem1();
+                    java.util.List<PipeDocRecord> results = tuple.getItem2();
+                    int totalPages = (int) Math.ceil((double) totalCount / pageSize);
+
+                    return new DocumentSearchResult(
+                            results,
+                            totalCount,
+                            page,
+                            pageSize,
+                            totalPages
+                    );
+                })
+                .onFailure().transform(throwable -> {
+                    LOG.errorf(throwable, "Failed to query documents by criteria");
+                    return new DocumentQueryException("Failed to query documents by criteria", throwable);
+                });
+    }
+
+    /**
+     * Helper method to check if a filter value is valid (non-null and non-blank).
+     */
+    private boolean isValidFilterValue(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    /**
+     * Search criteria for finding documents.
+     */
+    public record DocumentSearchCriteria(
+            String datasourceId,
+            String accountId,
+            String connectorId,
+            String clusterId,  // null = all, "" = intake only, "value" = specific cluster
+            Instant createdAfter,
+            Instant createdBefore,
+            int page,
+            int pageSize
+    ) {
+        public DocumentSearchCriteria {
+            // Validation
+            if (page < 1) {
+                throw new IllegalArgumentException("Page must be >= 1, got: " + page);
+            }
+            if (pageSize < 1) {
+                throw new IllegalArgumentException("Page size must be >= 1, got: " + pageSize);
+            }
+            if (pageSize > MAX_PAGE_SIZE) {
+                throw new IllegalArgumentException("Page size must be <= " + MAX_PAGE_SIZE + ", got: " + pageSize);
+            }
+        }
+    }
+
+    /**
+     * Result of a document search with pagination metadata.
+     */
+    public record DocumentSearchResult(
+            java.util.List<PipeDocRecord> documents,
+            long totalCount,
+            int currentPage,
+            int pageSize,
+            int totalPages
+    ) {}
+
+    /**
+     * Exception thrown when a document is not found.
+     */
+    public static class DocumentNotFoundException extends RuntimeException {
+        public DocumentNotFoundException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Exception thrown when a document query fails.
+     */
+    public static class DocumentQueryException extends RuntimeException {
+        public DocumentQueryException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
 
     /**
      * Exception thrown when account validation fails.
