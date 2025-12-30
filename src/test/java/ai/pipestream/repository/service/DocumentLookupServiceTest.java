@@ -354,10 +354,9 @@ public class DocumentLookupServiceTest {
         LOG.info("Testing findDocumentsByCriteria - invalid page size");
 
         // Create criteria with page size > 1000 should fail during construction
-        asserter.assertFailedWith(() -> {
-            new DocumentStorageService.DocumentSearchCriteria(null, null, null, null, null, null, 1, 1001);
-            return null;
-        }, throwable -> {
+        asserter.assertFailedWith(() -> 
+            new DocumentStorageService.DocumentSearchCriteria(null, null, null, null, null, null, 1, 1001), 
+        throwable -> {
             assertThat("Should throw IllegalArgumentException", 
                     throwable, instanceOf(IllegalArgumentException.class));
             assertThat("Error message should mention page size", 

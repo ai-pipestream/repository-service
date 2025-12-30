@@ -562,6 +562,11 @@ public class DocumentStorageService {
         // Default to selecting all if no criteria provided
         String query = queryBuilder.isEmpty() ? "1=1" : queryBuilder.toString();
         
+        // Log warning if no filters provided to avoid accidental full table scan
+        if (queryBuilder.isEmpty()) {
+            LOG.warnf("findDocumentsByCriteria called with no filter criteria - this will return all documents");
+        }
+        
         // Add ordering
         String orderBy = " order by createdAt desc";
 
@@ -571,8 +576,8 @@ public class DocumentStorageService {
         Uni<Long> countUni = PipeDocRecord.count(query, params.toArray());
 
         // Fetch paginated results
-        int pageSize = criteria.pageSize() > 0 ? criteria.pageSize() : 20;
-        int page = criteria.page() > 0 ? criteria.page() : 1;
+        int pageSize = criteria.pageSize();
+        int page = criteria.page();
 
         // Note: Panache page() uses 0-based indexing, so we need page - 1
         Uni<java.util.List<PipeDocRecord>> resultsUni = PipeDocRecord.<PipeDocRecord>find(query + orderBy, params.toArray())
@@ -616,11 +621,11 @@ public class DocumentStorageService {
     ) {
         public DocumentSearchCriteria {
             // Validation
-            if (page < 0) {
-                throw new IllegalArgumentException("Page must be >= 0");
+            if (page < 1) {
+                throw new IllegalArgumentException("Page must be >= 1");
             }
-            if (pageSize < 0) {
-                throw new IllegalArgumentException("Page size must be >= 0");
+            if (pageSize < 1) {
+                throw new IllegalArgumentException("Page size must be >= 1");
             }
             if (pageSize > 1000) {
                 throw new IllegalArgumentException("Page size must be <= 1000");
