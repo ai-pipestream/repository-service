@@ -39,6 +39,10 @@ import java.util.UUID;
 public class DocumentStorageService {
 
     private static final Logger LOG = Logger.getLogger(DocumentStorageService.class);
+    private static final int MAX_PAGE_SIZE = 1000;
+    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final String DEFAULT_QUERY_CONDITION = "1=1";
+    private static final String DEFAULT_ORDER_BY = " order by createdAt desc";
 
     @Inject
     S3AsyncClient s3AsyncClient;
@@ -561,7 +565,7 @@ public class DocumentStorageService {
 
         // Default to selecting all if no criteria provided
         boolean hasFilters = !queryBuilder.isEmpty();
-        String query = hasFilters ? queryBuilder.toString() : "1=1";
+        String query = hasFilters ? queryBuilder.toString() : DEFAULT_QUERY_CONDITION;
         
         // Log warning if no filters provided to avoid accidental full table scan
         if (!hasFilters) {
@@ -569,7 +573,7 @@ public class DocumentStorageService {
         }
         
         // Add ordering
-        String orderBy = " order by createdAt desc";
+        String orderBy = DEFAULT_ORDER_BY;
 
         LOG.debugf("Executing query: %s with %d parameters", query, params.size());
 
@@ -628,8 +632,8 @@ public class DocumentStorageService {
             if (pageSize < 1) {
                 throw new IllegalArgumentException("Page size must be >= 1, got: " + pageSize);
             }
-            if (pageSize > 1000) {
-                throw new IllegalArgumentException("Page size must be <= 1000, got: " + pageSize);
+            if (pageSize > MAX_PAGE_SIZE) {
+                throw new IllegalArgumentException("Page size must be <= " + MAX_PAGE_SIZE + ", got: " + pageSize);
             }
         }
     }
