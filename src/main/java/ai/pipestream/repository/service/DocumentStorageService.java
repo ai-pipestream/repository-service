@@ -466,6 +466,198 @@ public class DocumentStorageService {
     ) {}
 
     /**
+     * Find a document by its document ID (doc_id).
+     * Returns all PipeDocRecords with the given doc_id.
+     *
+     * @param docId the document ID to search for
+     * @return Uni containing list of PipeDocRecords with the given doc_id
+     */
+    public Uni<java.util.List<PipeDocRecord>> findDocumentById(String docId) {
+        if (docId == null || docId.isBlank()) {
+            return Uni.createFrom().failure(new DocumentNotFoundException("Document ID must not be null or blank"));
+        }
+
+        LOG.debugf("Finding documents by doc_id: %s", docId);
+
+        return PipeDocRecord.<PipeDocRecord>find("docId", docId).list()
+                .onFailure().transform(throwable -> {
+                    LOG.errorf(throwable, "Failed to find documents by doc_id: %s", docId);
+                    return new DocumentQueryException("Failed to query documents by ID", throwable);
+                });
+    }
+
+    /**
+     * Find documents by various criteria with pagination support.
+     *
+     * @param criteria the search criteria
+     * @return Uni containing paginated list of PipeDocRecords matching the criteria
+     */
+    public Uni<DocumentSearchResult> findDocumentsByCriteria(DocumentSearchCriteria criteria) {
+        if (criteria == null) {
+            return Uni.createFrom().failure(new IllegalArgumentException("Search criteria must not be null"));
+        }
+
+        LOG.debugf("Finding documents by criteria: %s", criteria);
+
+        // Build query dynamically based on criteria
+        StringBuilder queryBuilder = new StringBuilder();
+        java.util.List<Object> params = new java.util.ArrayList<>();
+        int paramIndex = 1;
+
+        // Add datasourceId filter (source)
+        if (criteria.datasourceId() != null && !criteria.datasourceId().isBlank()) {
+            queryBuilder.append("datasourceId = ?").append(paramIndex++);
+            params.add(criteria.datasourceId());
+        }
+
+        // Add accountId filter
+        if (criteria.accountId() != null && !criteria.accountId().isBlank()) {
+            if (!queryBuilder.isEmpty()) {
+                queryBuilder.append(" and ");
+            }
+            queryBuilder.append("accountId = ?").append(paramIndex++);
+            params.add(criteria.accountId());
+        }
+
+        // Add connectorId filter
+        if (criteria.connectorId() != null && !criteria.connectorId().isBlank()) {
+            if (!queryBuilder.isEmpty()) {
+                queryBuilder.append(" and ");
+            }
+            queryBuilder.append("connectorId = ?").append(paramIndex++);
+            params.add(criteria.connectorId());
+        }
+
+        // Add clusterId filter (can be used as a proxy for status: null=intake, value=processed)
+        if (criteria.clusterId() != null) {
+            if (!queryBuilder.isEmpty()) {
+                queryBuilder.append(" and ");
+            }
+            if (criteria.clusterId().isBlank()) {
+                // Empty string means filter for null cluster_id (intake documents)
+                queryBuilder.append("clusterId is null");
+            } else {
+                queryBuilder.append("clusterId = ?").append(paramIndex++);
+                params.add(criteria.clusterId());
+            }
+        }
+
+        // Add date range filters
+        if (criteria.createdAfter() != null) {
+            if (!queryBuilder.isEmpty()) {
+                queryBuilder.append(" and ");
+            }
+            queryBuilder.append("createdAt >= ?").append(paramIndex++);
+            params.add(criteria.createdAfter());
+        }
+
+        if (criteria.createdBefore() != null) {
+            if (!queryBuilder.isEmpty()) {
+                queryBuilder.append(" and ");
+            }
+            queryBuilder.append("createdAt <= ?").append(paramIndex++);
+            params.add(criteria.createdBefore());
+        }
+
+        // Default to selecting all if no criteria provided
+        String query = queryBuilder.isEmpty() ? "1=1" : queryBuilder.toString();
+        
+        // Add ordering
+        String orderBy = " order by createdAt desc";
+
+        LOG.debugf("Executing query: %s with %d parameters", query, params.size());
+
+        // Count total matching records
+        Uni<Long> countUni = PipeDocRecord.count(query, params.toArray());
+
+        // Fetch paginated results
+        int pageSize = criteria.pageSize() > 0 ? criteria.pageSize() : 20;
+        int page = criteria.page() > 0 ? criteria.page() : 1;
+        int offset = (page - 1) * pageSize;
+
+        Uni<java.util.List<PipeDocRecord>> resultsUni = PipeDocRecord.<PipeDocRecord>find(query + orderBy, params.toArray())
+                .page(offset / pageSize, pageSize)
+                .list();
+
+        // Combine count and results
+        return Uni.combine().all().unis(countUni, resultsUni)
+                .asTuple()
+                .map(tuple -> {
+                    Long totalCount = tuple.getItem1();
+                    java.util.List<PipeDocRecord> results = tuple.getItem2();
+                    int totalPages = (int) Math.ceil((double) totalCount / pageSize);
+
+                    return new DocumentSearchResult(
+                            results,
+                            totalCount,
+                            page,
+                            pageSize,
+                            totalPages
+                    );
+                })
+                .onFailure().transform(throwable -> {
+                    LOG.errorf(throwable, "Failed to query documents by criteria");
+                    return new DocumentQueryException("Failed to query documents by criteria", throwable);
+                });
+    }
+
+    /**
+     * Search criteria for finding documents.
+     */
+    public record DocumentSearchCriteria(
+            String datasourceId,
+            String accountId,
+            String connectorId,
+            String clusterId,  // null = all, "" = intake only, "value" = specific cluster
+            Instant createdAfter,
+            Instant createdBefore,
+            int page,
+            int pageSize
+    ) {
+        public DocumentSearchCriteria {
+            // Validation
+            if (page < 0) {
+                throw new IllegalArgumentException("Page must be >= 0");
+            }
+            if (pageSize < 0) {
+                throw new IllegalArgumentException("Page size must be >= 0");
+            }
+            if (pageSize > 1000) {
+                throw new IllegalArgumentException("Page size must be <= 1000");
+            }
+        }
+    }
+
+    /**
+     * Result of a document search with pagination metadata.
+     */
+    public record DocumentSearchResult(
+            java.util.List<PipeDocRecord> documents,
+            long totalCount,
+            int currentPage,
+            int pageSize,
+            int totalPages
+    ) {}
+
+    /**
+     * Exception thrown when a document is not found.
+     */
+    public static class DocumentNotFoundException extends RuntimeException {
+        public DocumentNotFoundException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Exception thrown when a document query fails.
+     */
+    public static class DocumentQueryException extends RuntimeException {
+        public DocumentQueryException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    /**
      * Exception thrown when account validation fails.
      */
     public static class AccountValidationException extends RuntimeException {
