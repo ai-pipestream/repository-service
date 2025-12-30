@@ -560,10 +560,11 @@ public class DocumentStorageService {
         }
 
         // Default to selecting all if no criteria provided
-        String query = queryBuilder.isEmpty() ? "1=1" : queryBuilder.toString();
+        boolean hasFilters = !queryBuilder.isEmpty();
+        String query = hasFilters ? queryBuilder.toString() : "1=1";
         
         // Log warning if no filters provided to avoid accidental full table scan
-        if (queryBuilder.isEmpty()) {
+        if (!hasFilters) {
             LOG.warnf("findDocumentsByCriteria called with no filter criteria - this will return all documents");
         }
         
@@ -622,13 +623,13 @@ public class DocumentStorageService {
         public DocumentSearchCriteria {
             // Validation
             if (page < 1) {
-                throw new IllegalArgumentException("Page must be >= 1");
+                throw new IllegalArgumentException("Page must be >= 1, got: " + page);
             }
             if (pageSize < 1) {
-                throw new IllegalArgumentException("Page size must be >= 1");
+                throw new IllegalArgumentException("Page size must be >= 1, got: " + pageSize);
             }
             if (pageSize > 1000) {
-                throw new IllegalArgumentException("Page size must be <= 1000");
+                throw new IllegalArgumentException("Page size must be <= 1000, got: " + pageSize);
             }
         }
     }
