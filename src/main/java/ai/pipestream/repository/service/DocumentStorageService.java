@@ -509,13 +509,13 @@ public class DocumentStorageService {
         int paramIndex = 1;
 
         // Add datasourceId filter (source)
-        if (criteria.datasourceId() != null && !criteria.datasourceId().isBlank()) {
+        if (isValidFilterValue(criteria.datasourceId())) {
             queryBuilder.append("datasourceId = ?").append(paramIndex++);
             params.add(criteria.datasourceId());
         }
 
         // Add accountId filter
-        if (criteria.accountId() != null && !criteria.accountId().isBlank()) {
+        if (isValidFilterValue(criteria.accountId())) {
             if (!queryBuilder.isEmpty()) {
                 queryBuilder.append(" and ");
             }
@@ -524,7 +524,7 @@ public class DocumentStorageService {
         }
 
         // Add connectorId filter
-        if (criteria.connectorId() != null && !criteria.connectorId().isBlank()) {
+        if (isValidFilterValue(criteria.connectorId())) {
             if (!queryBuilder.isEmpty()) {
                 queryBuilder.append(" and ");
             }
@@ -583,10 +583,10 @@ public class DocumentStorageService {
         // Fetch paginated results
         int pageSize = criteria.pageSize();
         int page = criteria.page();
+        int zeroBasedPage = page - 1; // Panache uses 0-based page indexing
 
-        // Note: Panache page() uses 0-based indexing, so we need page - 1
         Uni<java.util.List<PipeDocRecord>> resultsUni = PipeDocRecord.<PipeDocRecord>find(query + orderBy, params.toArray())
-                .page(page - 1, pageSize)
+                .page(zeroBasedPage, pageSize)
                 .list();
 
         // Combine count and results
@@ -609,6 +609,13 @@ public class DocumentStorageService {
                     LOG.errorf(throwable, "Failed to query documents by criteria");
                     return new DocumentQueryException("Failed to query documents by criteria", throwable);
                 });
+    }
+
+    /**
+     * Helper method to check if a filter value is valid (non-null and non-blank).
+     */
+    private boolean isValidFilterValue(String value) {
+        return value != null && !value.isBlank();
     }
 
     /**
