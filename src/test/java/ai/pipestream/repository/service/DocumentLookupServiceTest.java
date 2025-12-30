@@ -355,7 +355,9 @@ public class DocumentLookupServiceTest {
 
         // Create criteria with page size > 1000 should fail during construction
         asserter.assertFailedWith(() -> 
-            new DocumentStorageService.DocumentSearchCriteria(null, null, null, null, null, null, 1, 1001), 
+            io.smallrye.mutiny.Uni.createFrom().item(() -> 
+                new DocumentStorageService.DocumentSearchCriteria(null, null, null, null, null, null, 1, 1001)
+            ), 
         throwable -> {
             assertThat("Should throw IllegalArgumentException", 
                     throwable, instanceOf(IllegalArgumentException.class));
