@@ -62,9 +62,6 @@ public class DocumentStorageService {
     @Inject
     PipeDocUuidGenerator uuidGenerator;
 
-    @Inject
-    ai.pipestream.repository.graph.GraphValidationService graphValidationService;
-
     public DocumentStorageService() {
         LOG.info("DocumentStorageService initialized (Reactive)");
     }
@@ -151,23 +148,14 @@ public class DocumentStorageService {
                             : requestId;
 
                     // Determine graph_address_id: use provided graphLocationId, or fallback to datasource_id
-                    if (graphLocationId != null && !graphLocationId.isBlank()) {
-                        // Validate graph location ID against graph service (topology correctness check)
-                        return graphValidationService.validateGraphLocation(graphLocationId)
-                                .flatMap(isGraphLocationValid -> {
-                                    if (!isGraphLocationValid) {
-                                        return Uni.createFrom().failure(new IllegalArgumentException(
-                                                "Invalid graph_location_id: " + graphLocationId));
-                                    }
-                                    return continueStoring(docToStore, finalDocId, accountId, connectorId, finalDatasourceId,
-                                            resolvedRequestId, graphLocationId, clusterId);
-                                });
-                    } else {
-                        // Use datasource_id as graph_address_id (for initial intake)
-                        // clusterId should be null for intake
-                        return continueStoring(docToStore, finalDocId, accountId, connectorId, finalDatasourceId,
-                                resolvedRequestId, finalDatasourceId, null);
-                    }
+                    // Note: We do not validate graph_location_id here. Repository Service is "dumb storage".
+                    // Validation of topology happens downstream in the Engine when processing events.
+                    String finalGraphAddressId = (graphLocationId != null && !graphLocationId.isBlank()) 
+                            ? graphLocationId 
+                            : finalDatasourceId;
+
+                    return continueStoring(docToStore, finalDocId, accountId, connectorId, finalDatasourceId,
+                            resolvedRequestId, finalGraphAddressId, clusterId);
                 });
     }
 
@@ -221,7 +209,7 @@ public class DocumentStorageService {
             String versionId = putResponse.versionId();
 
             // 5. Persist to DB (Reactive Transaction with UPSERT pattern)
-            return Panache.withTransaction(() -> 
+            return Panache.<PipeDocRecord>withTransaction(() -> 
                 PipeDocRecord.<PipeDocRecord>findById(nodeId)
                         .flatMap(existingRecord -> {
                             if (existingRecord != null) {
@@ -261,7 +249,7 @@ public class DocumentStorageService {
                                 return record.persist();
                             }
                         })
-            ).map(persisted -> {
+            ).map((PipeDocRecord persisted) -> {
                 // 6. Emit Event
                 eventEmitter.emitCreated(
                         finalDocId,
@@ -277,7 +265,15 @@ public class DocumentStorageService {
                 );
 
                 // Return node_id (UUID) as the repository identifier
-                return new StoredDocument(nodeId.toString(), completeObjectKey, versionId, etag, sizeBytes, checksum);
+                return new StoredDocument(
+                        nodeId.toString(), 
+                        completeObjectKey, 
+                        versionId, 
+                        etag, 
+                        sizeBytes, 
+                        checksum,
+                        persisted.createdAt != null ? persisted.createdAt.toEpochMilli() : Instant.now().toEpochMilli()
+                );
             });
         });
     }
@@ -466,7 +462,8 @@ public class DocumentStorageService {
             String versionId,
             String etag,
             long sizeBytes,
-            String checksum
+            String checksum,
+            long createdAtEpochMs
     ) {}
 
     /**

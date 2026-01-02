@@ -17,7 +17,7 @@ public class WireMockTestResource implements QuarkusTestResourceLifecycleManager
         // NOTE: pipestream-wiremock-server exposes multiple endpoints:
         // - Port 8080: gRPC server exposing many services incl. AccountService (reflection-enabled)
         // - Port 50052: "Direct" streaming gRPC server (used for large streaming, and registration in some tests)
-        wireMockContainer = new GenericContainer<>(DockerImageName.parse("docker.io/pipestreamai/pipestream-wiremock-server:0.1.27"))
+        wireMockContainer = new GenericContainer<>(DockerImageName.parse("docker.io/pipestreamai/pipestream-wiremock-server:0.1.28"))
                 .withExposedPorts(8080, 50052)
                 .waitingFor(Wait.forLogMessage(".*WireMock Server started.*", 1))
                 // Configure accounts used by repository-service tests

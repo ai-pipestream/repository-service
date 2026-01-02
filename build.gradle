@@ -39,7 +39,6 @@ pipestreamProtos {
         register("pipeline-module")
         register("repo")
         register("admin")
-        register("engine")  // Needed for graph validation
     }
 }
 
