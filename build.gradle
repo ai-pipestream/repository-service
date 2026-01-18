@@ -101,6 +101,7 @@ dependencies {
     implementation 'io.quarkus:quarkus-opentelemetry'
 
     // Testing
+    testImplementation platform("ai.pipestream:pipestream-bom:${pipestreamBomVersion}")
     testImplementation 'io.quarkus:quarkus-junit5'
     testImplementation 'io.quarkus:quarkus-junit5-mockito'
     testImplementation 'io.quarkus:quarkus-test-vertx'
