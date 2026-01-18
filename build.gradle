@@ -106,6 +106,7 @@ dependencies {
     testImplementation 'io.quarkus:quarkus-test-vertx'
     testImplementation 'io.quarkus:quarkus-test-hibernate-reactive-panache'
     testImplementation 'io.rest-assured:rest-assured'
+    testImplementation(testFixtures("ai.pipestream:pipestream-test-support"))
     testImplementation 'org.testcontainers:postgresql'
     runtimeOnly libs.quarkus.logging.manager
 }

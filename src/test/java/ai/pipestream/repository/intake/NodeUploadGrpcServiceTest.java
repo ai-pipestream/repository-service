@@ -8,7 +8,7 @@ import ai.pipestream.repository.filesystem.upload.v1.NodeUploadServiceGrpc;
 import ai.pipestream.repository.filesystem.upload.v1.UploadFilesystemPipeDocRequest;
 import ai.pipestream.repository.filesystem.upload.v1.UploadFilesystemPipeDocResponse;
 import ai.pipestream.repository.http.MinioTestResource;
-import ai.pipestream.repository.util.WireMockTestResource;
+import ai.pipestream.test.support.RepositoryWireMockTestResource;
 import io.grpc.StatusRuntimeException;
 import io.quarkus.grpc.GrpcClient;
 import io.quarkus.test.common.QuarkusTestResource;
@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 @QuarkusTest
 @QuarkusTestResource(MinioTestResource.class)
-@QuarkusTestResource(WireMockTestResource.class)
+@QuarkusTestResource(RepositoryWireMockTestResource.class)
 class NodeUploadGrpcServiceTest {
 
     @GrpcClient("repository-service")

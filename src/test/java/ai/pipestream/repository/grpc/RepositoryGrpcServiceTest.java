@@ -5,7 +5,7 @@ import ai.pipestream.data.v1.PipeDoc;
 import ai.pipestream.repository.http.MinioTestResource;
 import ai.pipestream.repository.pipedoc.v1.*;
 import ai.pipestream.repository.util.PipeDocUuidGenerator;
-import ai.pipestream.repository.util.WireMockTestResource;
+import ai.pipestream.test.support.RepositoryWireMockTestResource;
 import io.quarkus.grpc.GrpcClient;
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 @QuarkusTest
 @QuarkusTestResource(MinioTestResource.class)
-@QuarkusTestResource(WireMockTestResource.class)
+@QuarkusTestResource(RepositoryWireMockTestResource.class)
 class RepositoryGrpcServiceTest {
 
     @GrpcClient("repository-service")

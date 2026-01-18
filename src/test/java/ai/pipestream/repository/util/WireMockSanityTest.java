@@ -3,6 +3,7 @@ package ai.pipestream.repository.util;
 import ai.pipestream.repository.account.v1.AccountServiceGrpc;
 import ai.pipestream.repository.account.v1.GetAccountRequest;
 import ai.pipestream.repository.account.v1.GetAccountResponse;
+import ai.pipestream.test.support.RepositoryWireMockTestResource;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.quarkus.test.common.QuarkusTestResource;
@@ -14,12 +15,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
-@QuarkusTestResource(WireMockTestResource.class)
+@QuarkusTestResource(RepositoryWireMockTestResource.class)
 public class WireMockSanityTest {
 
     @Test
     void canCallAccountServiceOnWireMock() {
-        // WireMockTestResource sets these properties (as Quarkus config overrides)
+        // RepositoryWireMockTestResource sets these properties (as Quarkus config overrides)
         String host = ConfigProvider.getConfig()
                 .getOptionalValue("quarkus.grpc.clients.account-service.host", String.class)
                 .orElse(null);

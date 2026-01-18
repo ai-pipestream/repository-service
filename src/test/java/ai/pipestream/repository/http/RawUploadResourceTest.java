@@ -2,7 +2,7 @@ package ai.pipestream.repository.http;
 
 import ai.pipestream.repository.entity.PipeDocRecord;
 import ai.pipestream.repository.s3.S3Config;
-import ai.pipestream.repository.util.WireMockTestResource;
+import ai.pipestream.test.support.RepositoryWireMockTestResource;
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.vertx.RunOnVertxContext;
@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @QuarkusTest
 @QuarkusTestResource(MinioTestResource.class)
-@QuarkusTestResource(WireMockTestResource.class)
+@QuarkusTestResource(RepositoryWireMockTestResource.class)
 class RawUploadResourceTest {
 
     @Inject
