@@ -6,8 +6,12 @@ import ai.pipestream.repository.account.v1.AccountEvent;
 import ai.pipestream.repository.account.v1.GetAccountRequest;
 import ai.pipestream.repository.account.v1.ListAccountsRequest;
 import ai.pipestream.repository.account.v1.MutinyAccountServiceGrpc;
+import ai.pipestream.repository.account.v1.StreamAllAccountsRequest;
+import ai.pipestream.repository.account.v1.StreamAllAccountsResponse;
 import io.quarkus.runtime.StartupEvent;
 import io.smallrye.mutiny.Uni;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
@@ -18,13 +22,14 @@ import org.jboss.logging.Logger;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 /**
  * Caches account information locally for fast validation.
  *
  * Cache is populated via:
  * 1. Kafka listener for account lifecycle events
- * 2. Non-blocking startup cache warming via ListAccounts gRPC call
+ * 2. Non-blocking startup cache warming via StreamAllAccounts gRPC call
  * 3. On-demand gRPC lookup on cache miss
  */
 @ApplicationScoped
@@ -57,7 +62,7 @@ public class AccountCacheService {
      */
     void onStartup(@Observes StartupEvent event) {
         LOG.info("Starting non-blocking account cache warmup...");
-        warmCache("")
+        warmCache()
                 .subscribe().with(
                         count -> {
                             warmupComplete.set(true);
@@ -71,9 +76,36 @@ public class AccountCacheService {
     }
 
     /**
+     * Stream all accounts to warm the cache.
+     */
+    private Uni<Integer> warmCache() {
+        return grpcClientFactory.getClient("account-manager", MutinyAccountServiceGrpc::newMutinyStub)
+                .flatMap(client -> client.streamAllAccounts(StreamAllAccountsRequest.newBuilder()
+                        .setIncludeInactive(false)
+                        .build())
+                    .onItem().invoke(response -> {
+                        if (response.hasAccount()) {
+                            Account account = response.getAccount();
+                            cache.put(account.getAccountId(), CachedAccount.from(account));
+                        }
+                    })
+                    .collect().with(Collectors.counting())
+                    .map(Long::intValue))
+                .onFailure(this::isUnimplementedStream)
+                .recoverWithUni(() -> warmCachePaged(""));
+    }
+
+    private boolean isUnimplementedStream(Throwable error) {
+        if (error instanceof StatusRuntimeException statusException) {
+            return statusException.getStatus().getCode() == Status.Code.UNIMPLEMENTED;
+        }
+        return false;
+    }
+
+    /**
      * Recursively pages through all accounts to warm the cache.
      */
-    private Uni<Integer> warmCache(String pageToken) {
+    private Uni<Integer> warmCachePaged(String pageToken) {
         return grpcClientFactory.getClient("account-manager", MutinyAccountServiceGrpc::newMutinyStub)
                 .flatMap(client -> {
                     ListAccountsRequest.Builder request = ListAccountsRequest.newBuilder()
@@ -93,7 +125,7 @@ public class AccountCacheService {
                     String nextToken = response.getNextPageToken();
                     if (nextToken != null && !nextToken.isEmpty()) {
                         int currentLoaded = loaded;
-                        return warmCache(nextToken).map(next -> currentLoaded + next);
+                        return warmCachePaged(nextToken).map(next -> currentLoaded + next);
                     }
                     return Uni.createFrom().item(loaded);
                 });
