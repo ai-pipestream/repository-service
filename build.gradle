@@ -83,6 +83,7 @@ dependencies {
     implementation 'ai.pipestream:pipestream-quarkus-devservices'
     implementation 'ai.pipestream:quarkus-dynamic-grpc'
     implementation 'ai.pipestream:pipestream-service-registration'
+    implementation 'ai.pipestream:pipestream-server'
 
     testImplementation 'ai.pipestream:pipestream-wiremock-server'
 
@@ -107,7 +108,7 @@ dependencies {
     testImplementation 'io.quarkus:quarkus-test-vertx'
     testImplementation 'io.quarkus:quarkus-test-hibernate-reactive-panache'
     testImplementation 'io.rest-assured:rest-assured'
-    testImplementation(testFixtures("ai.pipestream:pipestream-test-support:${pipestreamBomVersion}"))
+    testImplementation("ai.pipestream:pipestream-test-support:${pipestreamBomVersion}")
     testImplementation 'org.testcontainers:postgresql'
     runtimeOnly libs.quarkus.logging.manager
 }
@@ -123,7 +124,6 @@ java {
 test {
     maxHeapSize = "10g"
     systemProperty "java.util.logging.manager", "org.jboss.logmanager.LogManager"
-    systemProperty "pipestream.wiremock.image", "docker.io/pipestreamai/pipestream-wiremock-server:0.1.30"
 
     // Required for JDK 24+ with jboss-threads
     jvmArgs '--add-opens', 'java.base/java.lang=ALL-UNNAMED'
