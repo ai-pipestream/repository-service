@@ -3,6 +3,7 @@ package ai.pipestream.repository.http;
 import ai.pipestream.repository.entity.PipeDocRecord;
 import ai.pipestream.repository.s3.S3Config;
 import ai.pipestream.test.support.RepositoryWireMockTestResource;
+import ai.pipestream.test.support.S3TestResource;
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.vertx.RunOnVertxContext;
@@ -28,7 +29,7 @@ import java.nio.charset.StandardCharsets;
 import static org.junit.jupiter.api.Assertions.*;
 
 @QuarkusTest
-@QuarkusTestResource(MinioTestResource.class)
+@QuarkusTestResource(S3TestResource.class)
 @QuarkusTestResource(RepositoryWireMockTestResource.class)
 class RawUploadResourceTest {
 

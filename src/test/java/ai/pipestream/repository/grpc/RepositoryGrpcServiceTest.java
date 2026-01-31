@@ -2,7 +2,7 @@ package ai.pipestream.repository.grpc;
 
 import ai.pipestream.data.v1.OwnershipContext;
 import ai.pipestream.data.v1.PipeDoc;
-import ai.pipestream.repository.http.MinioTestResource;
+import ai.pipestream.test.support.S3TestResource;
 import ai.pipestream.repository.pipedoc.v1.*;
 import ai.pipestream.repository.util.PipeDocUuidGenerator;
 import ai.pipestream.test.support.RepositoryWireMockTestResource;
@@ -19,10 +19,10 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Integration tests for RepositoryGrpcService.
  * Tests the SavePipeDoc RPC with the new oneof graph_address structure.
- * Uses real PostgreSQL (via Dev Services), MinIO, and WireMock for Account Service.
+ * Uses real PostgreSQL (via Dev Services), LocalStack S3, and WireMock for Account Service.
  */
 @QuarkusTest
-@QuarkusTestResource(MinioTestResource.class)
+@QuarkusTestResource(S3TestResource.class)
 @QuarkusTestResource(RepositoryWireMockTestResource.class)
 class RepositoryGrpcServiceTest {
 
@@ -191,4 +191,3 @@ class RepositoryGrpcServiceTest {
         assertThrows(Exception.class, () -> pipeDocService.savePipeDoc(request));
     }
 }
-

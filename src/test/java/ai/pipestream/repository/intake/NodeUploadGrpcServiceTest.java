@@ -7,7 +7,7 @@ import ai.pipestream.repository.filesystem.upload.v1.GetUploadedDocumentResponse
 import ai.pipestream.repository.filesystem.upload.v1.NodeUploadServiceGrpc;
 import ai.pipestream.repository.filesystem.upload.v1.UploadFilesystemPipeDocRequest;
 import ai.pipestream.repository.filesystem.upload.v1.UploadFilesystemPipeDocResponse;
-import ai.pipestream.repository.http.MinioTestResource;
+import ai.pipestream.test.support.S3TestResource;
 import ai.pipestream.test.support.RepositoryWireMockTestResource;
 import io.grpc.StatusRuntimeException;
 import io.quarkus.grpc.GrpcClient;
@@ -21,10 +21,10 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Integration tests for NodeUploadGrpcService.
- * Uses real PostgreSQL (via Dev Services), MinIO, and WireMock for Account Service.
+ * Uses real PostgreSQL (via Dev Services), LocalStack S3, and WireMock for Account Service.
  */
 @QuarkusTest
-@QuarkusTestResource(MinioTestResource.class)
+@QuarkusTestResource(S3TestResource.class)
 @QuarkusTestResource(RepositoryWireMockTestResource.class)
 class NodeUploadGrpcServiceTest {
 
