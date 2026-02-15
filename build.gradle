@@ -44,24 +44,19 @@ pipestreamProtos {
 
 dependencies {
     implementation 'io.quarkus:quarkus-container-image-docker'
-    // Import pipestream BOM to align all managed versions
+    // Import pipestream BOM to align all managed versions (includes quarkus-amazon-services-bom)
     implementation platform("ai.pipestream:pipestream-bom:${pipestreamBomVersion}")
-    // Import Amazon Services BOM for S3
-    implementation platform("io.quarkus.platform:quarkus-amazon-services-bom:${quarkusPlatformVersion}")
 
 
     // Core Quarkus dependencies
     implementation 'io.quarkus:quarkus-arc'
     implementation 'io.quarkus:quarkus-grpc'
-    implementation 'io.quarkus:quarkus-rest'
     implementation 'io.quarkus:quarkus-rest-jackson'
     implementation 'io.grpc:grpc-services'
     implementation 'io.quarkus:quarkus-hibernate-reactive-panache'
     implementation 'io.quarkus:quarkus-reactive-pg-client'
     implementation 'io.quarkus:quarkus-jdbc-postgresql'
     implementation 'io.quarkus:quarkus-flyway'
-    implementation 'io.quarkus:quarkus-smallrye-health'
-    implementation 'io.quarkus:quarkus-smallrye-openapi'
     implementation 'io.quarkus:quarkus-container-image-docker'
 
     // S3 client (MinIO/AWS)
