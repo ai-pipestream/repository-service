@@ -261,7 +261,8 @@ public class RawUploadResource {
                                     s3Config.bucket(),
                                     versionId,
                                     resolvedRequestId,
-                                    resolvedConnectorId
+                                resolvedConnectorId,
+                                datasourceId
                             );
 
                             return new RawUploadReceipt(

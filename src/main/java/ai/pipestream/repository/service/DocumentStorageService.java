@@ -261,7 +261,8 @@ public class DocumentStorageService {
                         s3Config.bucket(),
                         versionId,
                         resolvedRequestId,
-                        connectorId
+                        connectorId,
+                        finalDatasourceId
                 );
 
                 // Return node_id (UUID) as the repository identifier

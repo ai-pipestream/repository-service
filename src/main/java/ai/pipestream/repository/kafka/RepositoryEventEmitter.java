@@ -2,6 +2,8 @@ package ai.pipestream.repository.kafka;
 
 import ai.pipestream.apicurio.registry.protobuf.ProtobufChannel;
 import ai.pipestream.apicurio.registry.protobuf.ProtobufEmitter;
+import ai.pipestream.events.v1.IntakeRepoEvent;
+import ai.pipestream.events.v1.IntakeRepoEventType;
 import ai.pipestream.repository.filesystem.v1.RepositoryEvent;
 import ai.pipestream.repository.filesystem.v1.SourceContext;
 import com.google.protobuf.Timestamp;
@@ -32,6 +34,12 @@ public class RepositoryEventEmitter {
     @ProtobufChannel("repository-events-out")
     ProtobufEmitter<RepositoryEvent> emitter;
 
+    @Inject
+    @ProtobufChannel("intake-repo-events-out")
+    ProtobufEmitter<IntakeRepoEvent> intakeEventEmitter;
+
+    private static final String INTAKE_SOURCE_NODE_ID = "connector-intake";
+
     /**
      * Emit a Created event after successful document storage.
      *
@@ -56,6 +64,38 @@ public class RepositoryEventEmitter {
                             String versionId,
                             String requestId,
                             String connectorId) {
+        emitCreated(docId, accountId, s3Key, pipedocS3Key, sizeBytes, contentHash, bucket, versionId,
+            requestId, connectorId, null);
+    }
+
+    /**
+     * Emit a Created event after successful document storage.
+     *
+     * Optionally emits an IntakeRepoEvent for connector-origin events.
+     *
+     * @param docId Document ID (used for key derivation)
+     * @param accountId Account ID
+     * @param s3Key S3 key for raw file
+     * @param pipedocS3Key S3 key for PipeDoc protobuf
+     * @param sizeBytes Size in bytes
+     * @param contentHash SHA-256 hash (if available)
+     * @param bucket S3 bucket name
+     * @param versionId S3 version ID (if versioning enabled)
+     * @param requestId Request ID for tracing
+     * @param connectorId Connector ID (if connector-initiated)
+     * @param datasourceId Datasource ID (if known for IntakeRepoEvent emission)
+     */
+    public void emitCreated(String docId,
+                            String accountId,
+                            String s3Key,
+                            String pipedocS3Key,
+                            long sizeBytes,
+                            String contentHash,
+                            String bucket,
+                            String versionId,
+                            String requestId,
+                            String connectorId,
+                            String datasourceId) {
 
         Instant now = Instant.now();
         String eventId = computeEventId(docId, "create", now);
@@ -92,7 +132,35 @@ public class RepositoryEventEmitter {
 
         // ProtobufEmitter uses RepositoryEventKeyExtractor to derive UUID key from document_id
         emitter.send(event);
-        LOG.infof("Emitted RepositoryEvent.Created: docId=%s, s3Key=%s", docId, s3Key);
+        LOG.debugf("Emitted RepositoryEvent.Created: docId=%s, s3Key=%s", docId, s3Key);
+
+        if (connectorId != null && !connectorId.isBlank() && datasourceId != null && !datasourceId.isBlank()) {
+            emitIntakeRepoCreated(eventId, now, docId, accountId, connectorId, datasourceId, versionId);
+        }
+    }
+
+    private void emitIntakeRepoCreated(String eventId,
+                                       Instant now,
+                                       String docId,
+                                       String accountId,
+                                       String connectorId,
+                                       String datasourceId,
+                                       String versionId) {
+        IntakeRepoEvent intakeEvent = IntakeRepoEvent.newBuilder()
+                .setEventId(eventId + "-intake")
+                .setEventType(IntakeRepoEventType.INTAKE_REPO_EVENT_TYPE_CREATED)
+                .setEventTime(toProtoTimestamp(now))
+                .setDocId(docId)
+                .setAccountId(accountId)
+                .setConnectorId(connectorId)
+                .setDatasourceId(datasourceId)
+                .setSourceNodeId(INTAKE_SOURCE_NODE_ID)
+                .setS3VersionId(versionId == null ? "" : versionId)
+                .build();
+
+        intakeEventEmitter.send(intakeEvent);
+        LOG.infof("Emitted IntakeRepoEvent created for connector handoff: docId=%s, accountId=%s, datasourceId=%s",
+                docId, accountId, datasourceId);
     }
 
     /**
