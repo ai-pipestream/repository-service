@@ -208,29 +208,47 @@ public class RawUploadResource {
                         })
                         .flatMap(pipeDocResponse -> {
                             
-                            // 4. Persist Metadata (Reactive Transaction)
-                            // For initial intake, graph_address_id = datasource_id, cluster_id = null
-                            return Panache.withTransaction(() -> {
-                                PipeDocRecord record = new PipeDocRecord();
-                                record.nodeId = nodeId; // UUID already generated above
-                                record.docId = resolvedDocId;
-                                record.graphAddressId = datasourceId; // For initial intake, graph_address_id = datasource_id
-                                record.clusterId = null; // Intake documents don't belong to a cluster
-                                record.accountId = accountId;
-                                record.datasourceId = datasourceId;
-                                record.connectorId = resolvedConnectorId;
-                                record.driveName = resolvedDriveName;
-                                record.objectKey = blobObjectKey; // Raw blob path with UUID filename
-                                record.pipedocObjectKey = pipedocObjectKey; // PipeDoc path with new structure
-                                record.versionId = versionId;
-                                record.etag = etag;
-                                record.sizeBytes = contentLength;
-                                record.contentType = resolvedContentType;
-                                record.filename = resolvedFilename;
-                                record.checksum = resolvedChecksum;
-                                record.createdAt = Instant.now();
-                                return record.persist();
-                            });
+                        // 4. Persist Metadata (Reactive Transaction)
+                        // For initial intake, graph_address_id = datasource_id, cluster_id = null
+                        return Panache.withTransaction(() -> 
+                            PipeDocRecord.<PipeDocRecord>findById(nodeId)
+                                .flatMap(existingRecord -> {
+                                    if (existingRecord != null) {
+                                        LOG.debugf("Updating existing PipeDocRecord for idempotent replay: node_id=%s, doc_id=%s", nodeId, resolvedDocId);
+                                        existingRecord.objectKey = blobObjectKey;
+                                        existingRecord.pipedocObjectKey = pipedocObjectKey;
+                                        existingRecord.clusterId = null;
+                                        existingRecord.versionId = versionId;
+                                        existingRecord.etag = etag;
+                                        existingRecord.sizeBytes = contentLength;
+                                        existingRecord.contentType = resolvedContentType;
+                                        existingRecord.filename = resolvedFilename;
+                                        existingRecord.checksum = resolvedChecksum;
+                                        return existingRecord.persist();
+                                    }
+
+                                    LOG.debugf("Creating new PipeDocRecord: node_id=%s, doc_id=%s", nodeId, resolvedDocId);
+                                    PipeDocRecord record = new PipeDocRecord();
+                                    record.nodeId = nodeId; // UUID already generated above
+                                    record.docId = resolvedDocId;
+                                    record.graphAddressId = datasourceId; // For initial intake, graph_address_id = datasource_id
+                                    record.clusterId = null; // Intake documents don't belong to a cluster
+                                    record.accountId = accountId;
+                                    record.datasourceId = datasourceId;
+                                    record.connectorId = resolvedConnectorId;
+                                    record.driveName = resolvedDriveName;
+                                    record.objectKey = blobObjectKey; // Raw blob path with UUID filename
+                                    record.pipedocObjectKey = pipedocObjectKey; // PipeDoc path with new structure
+                                    record.versionId = versionId;
+                                    record.etag = etag;
+                                    record.sizeBytes = contentLength;
+                                    record.contentType = resolvedContentType;
+                                    record.filename = resolvedFilename;
+                                    record.checksum = resolvedChecksum;
+                                    record.createdAt = Instant.now();
+                                    return record.persist();
+                                })
+                        );
                         }).map(persisted -> {
                             // 5. Emit Event
                             eventEmitter.emitCreated(
