@@ -21,7 +21,14 @@ import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -298,10 +305,10 @@ public class FilesystemGrpcService extends MutinyFilesystemServiceGrpc.Filesyste
     // ---- ListDriveBucketStatus ----
 
     @Override
-    @WithSession
     public Uni<ListDriveBucketStatusResponse> listDriveBucketStatus(ListDriveBucketStatusRequest request) {
-        return ai.pipestream.repository.entity.Drive.<ai.pipestream.repository.entity.Drive>listAll()
-                .flatMap(drives -> {
+        return Panache.<List<ai.pipestream.repository.entity.Drive>>withSession(() ->
+                ai.pipestream.repository.entity.Drive.<ai.pipestream.repository.entity.Drive>listAll()
+        ).flatMap(drives -> {
                     if (drives.isEmpty()) {
                         return Uni.createFrom().item(
                                 ListDriveBucketStatusResponse.newBuilder().setTotal(0).build());
@@ -559,52 +566,80 @@ public class FilesystemGrpcService extends MutinyFilesystemServiceGrpc.Filesyste
                         .build());
             }
 
-            // Pre-resolve buckets for each unique driveName
-            Map<String, String> driveToBucket = new HashMap<>();
-            AtomicInteger reindexed = new AtomicInteger(0);
-            AtomicInteger errors = new AtomicInteger(0);
-
-            for (PipeDocRecord record : records) {
-                try {
-                    String bucket = driveToBucket.computeIfAbsent(record.driveName, dn -> {
-                        DriveService.ResolvedDrive rd = driveService.resolveDrive(dn, record.accountId)
-                                .await().indefinitely();
-                        return rd.bucket();
-                    });
-
-                    repositoryEventEmitter.emitCreated(
-                            record.docId,
-                            record.accountId,
-                            record.objectKey,
-                            record.pipedocObjectKey,
-                            record.sizeBytes != null ? record.sizeBytes : 0L,
-                            record.checksum,
-                            bucket,
-                            record.versionId,
-                            UUID.randomUUID().toString(),
-                            record.connectorId,
-                            record.datasourceId
-                    );
-                    reindexed.incrementAndGet();
-                } catch (Exception e) {
-                    LOG.warnf("ReindexPipeDocs: failed to re-emit event for docId=%s: %s",
-                            record.docId, e.getMessage());
-                    errors.incrementAndGet();
+            // Collect unique drive names to resolve buckets reactively
+            Set<String> uniqueDriveNames = new HashSet<>();
+            Map<String, String> driveAccountHints = new HashMap<>();
+            for (PipeDocRecord r : records) {
+                if (r.driveName != null) {
+                    uniqueDriveNames.add(r.driveName);
+                    driveAccountHints.putIfAbsent(r.driveName, r.accountId);
                 }
             }
 
-            return Uni.createFrom().item(ReindexPipeDocsResponse.newBuilder()
-                    .setScanned(scanned)
-                    .setReindexed(reindexed.get())
-                    .setErrors(errors.get())
-                    .build());
+            // Resolve all drive buckets reactively, then emit events synchronously
+            List<Uni<Map.Entry<String, String>>> resolveUnis = new ArrayList<>();
+            for (String dn : uniqueDriveNames) {
+                resolveUnis.add(
+                    driveService.resolveDrive(dn, driveAccountHints.get(dn))
+                        .map(rd -> Map.entry(dn, rd.bucket()))
+                );
+            }
+
+            Uni<Map<String, String>> bucketMapUni;
+            if (resolveUnis.isEmpty()) {
+                bucketMapUni = Uni.createFrom().item(Map.of());
+            } else {
+                bucketMapUni = Uni.join().all(resolveUnis).andCollectFailures()
+                        .map(entries -> {
+                            Map<String, String> map = new HashMap<>();
+                            for (Map.Entry<String, String> e : entries) {
+                                map.put(e.getKey(), e.getValue());
+                            }
+                            return map;
+                        });
+            }
+
+            return bucketMapUni.map(driveToBucket -> {
+                AtomicInteger reindexed = new AtomicInteger(0);
+                AtomicInteger errors = new AtomicInteger(0);
+
+                for (PipeDocRecord record : records) {
+                    try {
+                        String bucket = driveToBucket.getOrDefault(record.driveName, s3Config.bucket());
+                        // Use the record's nodeId as requestId — it's the PK, deterministic and traceable
+                        repositoryEventEmitter.emitCreated(
+                                record.docId,
+                                record.accountId,
+                                record.objectKey,
+                                record.pipedocObjectKey,
+                                record.sizeBytes != null ? record.sizeBytes : 0L,
+                                record.checksum,
+                                bucket,
+                                record.versionId,
+                                record.nodeId.toString(),
+                                record.connectorId,
+                                record.datasourceId
+                        );
+                        reindexed.incrementAndGet();
+                    } catch (Exception e) {
+                        LOG.warnf("ReindexPipeDocs: failed to re-emit event for docId=%s: %s",
+                                record.docId, e.getMessage());
+                        errors.incrementAndGet();
+                    }
+                }
+
+                return ReindexPipeDocsResponse.newBuilder()
+                        .setScanned(scanned)
+                        .setReindexed(reindexed.get())
+                        .setErrors(errors.get())
+                        .build();
+            });
         });
     }
 
     // ---- StreamAllMetadata ----
 
     @Override
-    @WithSession
     public Multi<StreamAllMetadataResponse> streamAllMetadata(StreamAllMetadataRequest request) {
         boolean includeDrives = request.getIncludeDrives();
         boolean includeNodes = request.getIncludeNodes();
@@ -617,39 +652,40 @@ public class FilesystemGrpcService extends MutinyFilesystemServiceGrpc.Filesyste
 
         AtomicLong sequenceCounter = new AtomicLong(0);
 
-        // Drive stream
+        // Drive stream — wrap Panache calls in withSession
         Multi<StreamAllMetadataResponse> driveStream;
         if (includeDrives) {
-            driveStream = Multi.createFrom().uni(
-                    Uni.createFrom().deferred(() -> {
-                        if (driveFilter != null && !driveFilter.isBlank()) {
-                            return ai.pipestream.repository.entity.Drive
-                                    .<ai.pipestream.repository.entity.Drive>find("driveId", driveFilter).list();
-                        }
-                        return ai.pipestream.repository.entity.Drive.<ai.pipestream.repository.entity.Drive>listAll();
-                    })
-            ).onItem().transformToMulti(drives -> Multi.createFrom().iterable(drives))
-             .concatenate()
-             .filter(d -> since == null || (d.updatedAt != null && d.updatedAt.isAfter(since)))
-             .map(d -> StreamAllMetadataResponse.newBuilder()
-                     .setDrive(DriveMetadata.newBuilder()
-                             .setDrive(toProtoDrive(d))
-                             .setS3Key(d.s3Bucket != null ? d.s3Bucket + "/" + (d.s3Prefix != null ? d.s3Prefix : "") : "")
-                             .build())
-                     .setSequenceNumber(sequenceCounter.incrementAndGet())
-                     .build());
+            Uni<List<ai.pipestream.repository.entity.Drive>> driveQuery = Panache.withSession(() -> {
+                if (driveFilter != null && !driveFilter.isBlank()) {
+                    return ai.pipestream.repository.entity.Drive
+                            .<ai.pipestream.repository.entity.Drive>find("driveId", driveFilter).list();
+                }
+                return ai.pipestream.repository.entity.Drive.<ai.pipestream.repository.entity.Drive>listAll();
+            });
+
+            driveStream = Multi.createFrom().uni(driveQuery)
+                    .onItem().transformToMulti(drives -> Multi.createFrom().iterable(drives))
+                    .concatenate()
+                    .filter(d -> since == null || (d.updatedAt != null && d.updatedAt.isAfter(since)))
+                    .map(d -> StreamAllMetadataResponse.newBuilder()
+                            .setDrive(DriveMetadata.newBuilder()
+                                    .setDrive(toProtoDrive(d))
+                                    .setS3Key(d.s3Bucket != null ? d.s3Bucket + "/" + (d.s3Prefix != null ? d.s3Prefix : "") : "")
+                                    .build())
+                            .setSequenceNumber(sequenceCounter.incrementAndGet())
+                            .build());
         } else {
             driveStream = Multi.createFrom().empty();
         }
 
-        // Node stream (paginated iteration of PipeDocRecords)
+        // Node stream — paginated iteration of PipeDocRecords, each page in its own session
         Multi<StreamAllMetadataResponse> nodeStream;
         if (includeNodes) {
             int pageSizeInt = (int) Math.min(batchSize, 1000);
             nodeStream = Multi.createBy().repeating()
                     .uni(AtomicInteger::new, pageState -> {
                         int currentPage = pageState.getAndIncrement();
-                        return Uni.createFrom().deferred(() -> {
+                        return Panache.withSession(() -> {
                             if (driveFilter != null && !driveFilter.isBlank()) {
                                 if (since != null) {
                                     return PipeDocRecord.<PipeDocRecord>find(
