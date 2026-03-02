@@ -20,6 +20,8 @@ import org.eclipse.microprofile.reactive.messaging.Incoming;
 import org.eclipse.microprofile.reactive.messaging.Message;
 import org.jboss.logging.Logger;
 
+import ai.pipestream.repository.service.DriveService;
+
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
@@ -43,6 +45,9 @@ public class AccountCacheService {
 
     @Inject
     DynamicGrpcClientFactory grpcClientFactory;
+
+    @Inject
+    DriveService driveService;
 
     @ConfigProperty(name = "repo.account.validation.enabled", defaultValue = "true")
     boolean validationEnabled;
@@ -144,6 +149,12 @@ public class AccountCacheService {
                 AccountEvent.Created created = event.getCreated();
                 cache.put(accountId, new CachedAccount(accountId, created.getName(), true));
                 LOG.infof("Account created: %s", accountId);
+                // Auto-create default drive for the new account
+                driveService.getOrCreateDefaultDrive(accountId)
+                        .subscribe().with(
+                                drive -> LOG.infof("Auto-created default drive for account %s: %s", accountId, drive.driveId),
+                                error -> LOG.warnf("Failed to auto-create default drive for account %s: %s", accountId, error.getMessage())
+                        );
             }
             case UPDATED -> {
                 AccountEvent.Updated updated = event.getUpdated();

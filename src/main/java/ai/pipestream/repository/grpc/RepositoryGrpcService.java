@@ -5,6 +5,7 @@ import ai.pipestream.repository.entity.PipeDocRecord;
 import ai.pipestream.repository.pipedoc.v1.*;
 import ai.pipestream.repository.service.DocumentStorageService;
 import io.quarkus.grpc.GrpcService;
+import io.quarkus.hibernate.reactive.panache.common.WithSession;
 import io.smallrye.mutiny.Uni;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -15,6 +16,7 @@ import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 
 import ai.pipestream.data.v1.PipeDoc;
 import ai.pipestream.repository.s3.S3Config;
+import ai.pipestream.repository.service.DriveService;
 
 /**
  * gRPC service implementation for Repository Service.
@@ -34,11 +36,15 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
     @Inject
     S3Config s3Config;
 
+    @Inject
+    DriveService driveService;
+
     public RepositoryGrpcService() {
         LOG.info("RepositoryGrpcService initialized");
     }
 
     @Override
+    @WithSession
     public Uni<SavePipeDocResponse> savePipeDoc(SavePipeDocRequest request) {
         LOG.debugf("savePipeDoc request: drive=%s, connector_id=%s, has_use_datasource_id=%s, has_graph_location_id=%s", 
                 request.getDrive(), request.getConnectorId(), 
@@ -70,8 +76,11 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
         String clusterId = request.hasClusterId() ? request.getClusterId() : null;
         LOG.debugf("Using cluster_id: %s", clusterId != null ? clusterId : "null (intake)");
         
+        // Pass drive from request so storage resolves correct S3 bucket+prefix
+        String driveName = request.getDrive();
+
         // Use DocumentStorageService to store the document
-        return storageService.store(docToSave, null, graphLocationId, clusterId)
+        return storageService.store(docToSave, null, graphLocationId, clusterId, driveName)
                 .map(stored -> SavePipeDocResponse.newBuilder()
                         .setNodeId(stored.documentId())
                         .setDrive(request.getDrive())
@@ -84,6 +93,7 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
     }
 
     @Override
+    @WithSession
     public Uni<GetPipeDocResponse> getPipeDoc(GetPipeDocRequest request) {
         LOG.debugf("getPipeDoc request: node_id=%s", request.getNodeId());
         
@@ -129,19 +139,20 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
     }
 
     @Override
+    @WithSession
     public Uni<GetPipeDocByReferenceResponse> getPipeDocByReference(GetPipeDocByReferenceRequest request) {
         if (!request.hasDocumentRef()) {
             return Uni.createFrom().failure(new IllegalArgumentException("DocumentReference is required"));
         }
-        
+
         DocumentReference ref = request.getDocumentRef();
-        LOG.debugf("getPipeDocByReference request: doc_id=%s, source_node_id=%s, account_id=%s", 
+        LOG.debugf("getPipeDocByReference request: doc_id=%s, source_node_id=%s, account_id=%s",
                 ref.getDocId(), ref.getSourceNodeId(), ref.getAccountId());
-        
+
         String docId = ref.getDocId();
-        String graphAddressId = ref.getSourceNodeId(); // Note: proto field still named source_node_id, represents graph_address_id
+        String graphAddressId = ref.getSourceNodeId(); // proto field still named source_node_id, represents graph_address_id
         String accountId = ref.getAccountId();
-        
+
         if (docId == null || docId.isEmpty()) {
             return Uni.createFrom().failure(new IllegalArgumentException("DocumentReference.doc_id is required"));
         }
@@ -151,53 +162,39 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
         if (accountId == null || accountId.isEmpty()) {
             return Uni.createFrom().failure(new IllegalArgumentException("DocumentReference.account_id is required"));
         }
-        
-        // Look up the document record by composite key (doc_id, graph_address_id, account_id)
-        return PipeDocRecord.<PipeDocRecord>find("docId = ?1 and graphAddressId = ?2 and accountId = ?3", 
-                docId, graphAddressId, accountId).firstResult()
-                .flatMap(record -> {
-                    if (record == null) {
+
+        // Use DocumentStorageService for drive-aware S3 retrieval
+        return storageService.getByCompositeKey(docId, graphAddressId, accountId)
+                .flatMap(doc -> {
+                    if (doc == null) {
                         LOG.warnf("Document not found: doc_id=%s, account_id=%s", docId, accountId);
                         return Uni.createFrom().failure(new RuntimeException(
                                 String.format("Document not found: doc_id=%s, account_id=%s", docId, accountId)));
                     }
-                    
-                    // Fetch the PipeDoc from S3
-                    return Uni.createFrom().completionStage(
-                            s3AsyncClient.getObject(
-                                    GetObjectRequest.builder()
-                                            .bucket(s3Config.bucket())
-                                            .key(record.pipedocObjectKey)
-                                            .build(),
-                                    AsyncResponseTransformer.toBytes()
-                            )
-                    )
-                    .map(response -> {
-                        try {
-                            PipeDoc doc = PipeDoc.parseFrom(response.asByteArray());
-                            
-                            return GetPipeDocByReferenceResponse.newBuilder()
-                                    .setPipedoc(doc)
-                                    .setNodeId(record.nodeId.toString()) // Use UUID node_id
-                                    .setDrive(record.driveName)
-                                    .setSizeBytes(record.sizeBytes != null ? record.sizeBytes : 0)
-                                    .setRetrievedAtEpochMs(System.currentTimeMillis())
-                                    .build();
-                        } catch (Exception e) {
-                            LOG.errorf(e, "Failed to parse PipeDoc from S3: doc_id=%s", docId);
-                            throw new RuntimeException("Failed to parse PipeDoc", e);
-                        }
-                    })
-                    .onFailure(NoSuchKeyException.class).recoverWithUni(throwable -> {
-                        LOG.errorf(throwable, "S3 object not found: key=%s, doc_id=%s", record.pipedocObjectKey, docId);
-                        return Uni.createFrom().failure(new RuntimeException("Document data not found in storage"));
-                    });
+
+                    // Look up record metadata for response enrichment
+                    return PipeDocRecord.<PipeDocRecord>find("docId = ?1 and graphAddressId = ?2 and accountId = ?3",
+                                    docId, graphAddressId, accountId).firstResult()
+                            .map(record -> {
+                                GetPipeDocByReferenceResponse.Builder builder = GetPipeDocByReferenceResponse.newBuilder()
+                                        .setPipedoc(doc)
+                                        .setRetrievedAtEpochMs(System.currentTimeMillis());
+
+                                if (record != null) {
+                                    builder.setNodeId(record.nodeId.toString())
+                                            .setDrive(record.driveName != null ? record.driveName : "default")
+                                            .setSizeBytes(record.sizeBytes != null ? record.sizeBytes : 0);
+                                }
+
+                                return builder.build();
+                            });
                 })
-                .onFailure().invoke(throwable -> LOG.errorf(throwable, 
+                .onFailure().invoke(throwable -> LOG.errorf(throwable,
                         "Failed to get PipeDoc by reference: doc_id=%s, account_id=%s", docId, accountId));
     }
 
     @Override
+    @WithSession
     public Uni<ListPipeDocsResponse> listPipeDocs(ListPipeDocsRequest request) {
         LOG.debugf("listPipeDocs request: limit=%d, drive=%s, connectorId=%s", 
                 request.getLimit(), request.getDrive(), request.getConnectorId());
@@ -258,6 +255,7 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
     }
 
     @Override
+    @WithSession
     public Uni<GetBlobResponse> getBlob(GetBlobRequest request) {
         if (!request.hasStorageRef()) {
             return Uni.createFrom().failure(new IllegalArgumentException("FileStorageReference is required"));
@@ -276,19 +274,21 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
 
         LOG.debugf("Fetching blob from S3: drive=%s, object_key=%s", driveName, objectKey);
 
-        // Build S3 GetObjectRequest - include version_id if provided
-        GetObjectRequest.Builder requestBuilder = GetObjectRequest.builder()
-                .bucket(s3Config.bucket())
-                .key(objectKey);
+        // Resolve drive to get correct S3 bucket
+        return driveService.resolveDrive(driveName, null)
+        .flatMap(resolvedDrive -> {
+            GetObjectRequest.Builder requestBuilder = GetObjectRequest.builder()
+                    .bucket(resolvedDrive.bucket())
+                    .key(objectKey);
 
-        if (storageRef.hasVersionId() && !storageRef.getVersionId().isEmpty()) {
-            requestBuilder.versionId(storageRef.getVersionId());
-        }
+            if (storageRef.hasVersionId() && !storageRef.getVersionId().isEmpty()) {
+                requestBuilder.versionId(storageRef.getVersionId());
+            }
 
-        // Fetch blob bytes from S3 (matches pattern from GetPipeDocByReference - no emitOn, direct S3 access)
-        return Uni.createFrom().completionStage(
-                s3AsyncClient.getObject(requestBuilder.build(), AsyncResponseTransformer.toBytes())
-        )
+            return Uni.createFrom().completionStage(
+                    s3AsyncClient.getObject(requestBuilder.build(), AsyncResponseTransformer.toBytes())
+            );
+        })
         .map(response -> {
             byte[] blobData = response.asByteArray();
             long sizeBytes = blobData.length;

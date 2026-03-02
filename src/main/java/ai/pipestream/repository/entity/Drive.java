@@ -31,9 +31,21 @@ public class Drive extends PanacheEntityBase {
     @Column(name = "s3_prefix")
     public String s3Prefix;
 
+    @Column(name = "account_id")
+    public String accountId;
+
+    @Column(name = "region", length = 64)
+    public String region;
+
+    @Column(name = "credentials_ref", length = 512)
+    public String credentialsRef;
+
     @Column(name = "created_at", nullable = false)
     public Instant createdAt;
 
     @Column(name = "updated_at", nullable = false)
     public Instant updatedAt;
+
+    @Column(columnDefinition = "jsonb")
+    public String metadata;
 }

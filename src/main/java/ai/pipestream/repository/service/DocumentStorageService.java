@@ -62,6 +62,9 @@ public class DocumentStorageService {
     @Inject
     PipeDocUuidGenerator uuidGenerator;
 
+    @Inject
+    DriveService driveService;
+
     public DocumentStorageService() {
         LOG.info("DocumentStorageService initialized (Reactive)");
     }
@@ -76,7 +79,7 @@ public class DocumentStorageService {
      * @return Uni containing storage result containing the resolved document id and S3 key
      */
     public Uni<StoredDocument> store(PipeDoc document) {
-        return store(document, null, null, null);
+        return store(document, null, null, null, null);
     }
 
     /**
@@ -89,7 +92,7 @@ public class DocumentStorageService {
      * @return Uni containing storage result
      */
     public Uni<StoredDocument> store(PipeDoc document, String requestId) {
-        return store(document, requestId, null, null);
+        return store(document, requestId, null, null, null);
     }
 
     /**
@@ -102,6 +105,20 @@ public class DocumentStorageService {
      * @return Uni containing storage result
      */
     public Uni<StoredDocument> store(PipeDoc document, String requestId, String graphLocationId, String clusterId) {
+        return store(document, requestId, graphLocationId, clusterId, null);
+    }
+
+    /**
+     * Store a {@link PipeDoc} with a specific request ID, graph location ID, cluster ID, and drive name.
+     *
+     * @param document the document to store
+     * @param requestId optional request ID for tracing (auto-generated if null)
+     * @param graphLocationId optional graph location ID (if null, uses datasource_id from ownership)
+     * @param clusterId optional cluster ID (null for intake, set for cluster processing)
+     * @param driveName optional drive name (if null, uses account's default drive)
+     * @return Uni containing storage result
+     */
+    public Uni<StoredDocument> store(PipeDoc document, String requestId, String graphLocationId, String clusterId, String driveName) {
         if (document == null) {
             return Uni.createFrom().failure(new IllegalArgumentException("document must not be null"));
         }
@@ -154,19 +171,24 @@ public class DocumentStorageService {
                             ? graphLocationId 
                             : finalDatasourceId;
 
-                    return continueStoring(docToStore, finalDocId, accountId, connectorId, finalDatasourceId,
-                            resolvedRequestId, finalGraphAddressId, clusterId);
+                    // Resolve drive to get correct S3 bucket + prefix
+                    return driveService.resolveDrive(driveName, accountId)
+                            .flatMap(resolvedDrive -> continueStoring(docToStore, finalDocId, accountId, connectorId, finalDatasourceId,
+                                    resolvedRequestId, finalGraphAddressId, clusterId, resolvedDrive));
                 });
     }
 
     /**
      * Continues the storage process after graph address ID is resolved.
      */
-    private Uni<StoredDocument> continueStoring(PipeDoc docToStore, String finalDocId, String accountId, 
-            String connectorId, String finalDatasourceId, String resolvedRequestId, String resolvedGraphAddressId, String clusterId) {
+    private Uni<StoredDocument> continueStoring(PipeDoc docToStore, String finalDocId, String accountId,
+            String connectorId, String finalDatasourceId, String resolvedRequestId, String resolvedGraphAddressId,
+            String clusterId, DriveService.ResolvedDrive resolvedDrive) {
         Context requestContext = Vertx.currentContext().getDelegate();
-        
-        String driveName = "default";
+
+        String driveName = resolvedDrive.driveId();
+        String resolvedBucket = resolvedDrive.bucket();
+        String resolvedKeyPrefix = resolvedDrive.keyPrefix();
         
         byte[] pipeDocBytes = docToStore.toByteArray();
         String contentType = "application/x-protobuf";
@@ -177,18 +199,18 @@ public class DocumentStorageService {
         UUID nodeId = uuidGenerator.generateNodeId(finalDocId, resolvedGraphAddressId, accountId);
         
         // 3. Build complete S3 object key with UUID filename
-        String basePath = buildObjectKeyBase(driveName, accountId, connectorId, finalDatasourceId, finalDocId, clusterId);
+        String basePath = buildObjectKeyBase(resolvedKeyPrefix, driveName, accountId, connectorId, finalDatasourceId, finalDocId, clusterId);
         String completeObjectKey = basePath + "/" + nodeId.toString() + ".pb";
-        
+
         LOG.infof("Storing PipeDoc doc_id=%s, graph_address_id=%s, cluster_id=%s to s3://%s/%s (bytes=%d)",
-                finalDocId, resolvedGraphAddressId, clusterId != null ? clusterId : "intake", 
-                s3Config.bucket(), completeObjectKey, sizeBytes);
+                finalDocId, resolvedGraphAddressId, clusterId != null ? clusterId : "intake",
+                resolvedBucket, completeObjectKey, sizeBytes);
 
         // 4. Store to S3
         return Uni.createFrom().completionStage(
                 s3AsyncClient.putObject(
                         PutObjectRequest.builder()
-                                .bucket(s3Config.bucket())
+                                .bucket(resolvedBucket)
                                 .key(completeObjectKey)
                                 .contentType(contentType)
                                 .contentLength(sizeBytes)
@@ -258,7 +280,7 @@ public class DocumentStorageService {
                         completeObjectKey,
                         sizeBytes,
                         checksum,
-                        s3Config.bucket(),
+                        resolvedBucket,
                         versionId,
                         resolvedRequestId,
                         connectorId,
@@ -307,31 +329,32 @@ public class DocumentStorageService {
                         return Uni.createFrom().nullItem();
                     }
 
-                    // Fetch from S3
-                    return Uni.createFrom().completionStage(
-                            s3AsyncClient.getObject(
-                                    GetObjectRequest.builder()
-                                            .bucket(s3Config.bucket())
-                                            .key(record.pipedocObjectKey)
-                                            .build(),
-                                    AsyncResponseTransformer.toBytes()
-                            )
-                    )
-                    .emitOn(runnable -> {
-                        if (requestContext != null) {
-                            requestContext.runOnContext(v -> runnable.run());
-                        } else {
-                            vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
-                        }
-                    })
-                    .map(response -> {
-                        try {
-                            return PipeDoc.parseFrom(response.asByteArray());
-                        } catch (Exception e) {
-                            LOG.errorf(e, "Failed to parse PipeDoc from S3 for node_id=%s", nodeId);
-                            return null;
-                        }
-                    }).onFailure(NoSuchKeyException.class).recoverWithItem((PipeDoc) null);
+                    // Resolve drive to get correct S3 bucket
+                    return driveService.resolveDrive(record.driveName, record.accountId)
+                            .flatMap(resolvedDrive -> Uni.createFrom().completionStage(
+                                    s3AsyncClient.getObject(
+                                            GetObjectRequest.builder()
+                                                    .bucket(resolvedDrive.bucket())
+                                                    .key(record.pipedocObjectKey)
+                                                    .build(),
+                                            AsyncResponseTransformer.toBytes()
+                                    )
+                            ))
+                            .emitOn(runnable -> {
+                                if (requestContext != null) {
+                                    requestContext.runOnContext(v -> runnable.run());
+                                } else {
+                                    vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
+                                }
+                            })
+                            .map(response -> {
+                                try {
+                                    return PipeDoc.parseFrom(response.asByteArray());
+                                } catch (Exception e) {
+                                    LOG.errorf(e, "Failed to parse PipeDoc from S3 for node_id=%s", nodeId);
+                                    return null;
+                                }
+                            }).onFailure(NoSuchKeyException.class).recoverWithItem((PipeDoc) null);
                 });
     }
 
@@ -347,8 +370,8 @@ public class DocumentStorageService {
      */
     public Uni<PipeDoc> getByCompositeKey(String docId, String graphAddressId, String accountId) {
         Context requestContext = Vertx.currentContext().getDelegate();
-        
-        if (docId == null || docId.isBlank() || graphAddressId == null || graphAddressId.isBlank() 
+
+        if (docId == null || docId.isBlank() || graphAddressId == null || graphAddressId.isBlank()
                 || accountId == null || accountId.isBlank()) {
             return Uni.createFrom().nullItem();
         }
@@ -363,32 +386,33 @@ public class DocumentStorageService {
                         return Uni.createFrom().nullItem();
                     }
 
-                    // Fetch from S3
-                    return Uni.createFrom().completionStage(
-                            s3AsyncClient.getObject(
-                                    GetObjectRequest.builder()
-                                            .bucket(s3Config.bucket())
-                                            .key(record.pipedocObjectKey)
-                                            .build(),
-                                    AsyncResponseTransformer.toBytes()
-                            )
-                    )
-                    .emitOn(runnable -> {
-                        if (requestContext != null) {
-                            requestContext.runOnContext(v -> runnable.run());
-                        } else {
-                            vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
-                        }
-                    })
-                    .map(response -> {
-                        try {
-                            return PipeDoc.parseFrom(response.asByteArray());
-                        } catch (Exception e) {
-                            LOG.errorf(e, "Failed to parse PipeDoc from S3 for doc_id=%s, graph_address_id=%s, account_id=%s", 
-                                    docId, graphAddressId, accountId);
-                            return null;
-                        }
-                    }).onFailure(NoSuchKeyException.class).recoverWithItem((PipeDoc) null);
+                    // Resolve drive to get correct S3 bucket
+                    return driveService.resolveDrive(record.driveName, record.accountId)
+                            .flatMap(resolvedDrive -> Uni.createFrom().completionStage(
+                                    s3AsyncClient.getObject(
+                                            GetObjectRequest.builder()
+                                                    .bucket(resolvedDrive.bucket())
+                                                    .key(record.pipedocObjectKey)
+                                                    .build(),
+                                            AsyncResponseTransformer.toBytes()
+                                    )
+                            ))
+                            .emitOn(runnable -> {
+                                if (requestContext != null) {
+                                    requestContext.runOnContext(v -> runnable.run());
+                                } else {
+                                    vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
+                                }
+                            })
+                            .map(response -> {
+                                try {
+                                    return PipeDoc.parseFrom(response.asByteArray());
+                                } catch (Exception e) {
+                                    LOG.errorf(e, "Failed to parse PipeDoc from S3 for doc_id=%s, graph_address_id=%s, account_id=%s",
+                                            docId, graphAddressId, accountId);
+                                    return null;
+                                }
+                            }).onFailure(NoSuchKeyException.class).recoverWithItem((PipeDoc) null);
                 });
     }
 
@@ -402,15 +426,15 @@ public class DocumentStorageService {
      * 
      * The UUID filename will be appended by the caller: basePath + "/" + uuid + ".pb"
      */
-    private String buildObjectKeyBase(String driveName, String accountId, String connectorId, String datasourceId, String docId, String clusterId) {
+    private String buildObjectKeyBase(String keyPrefix, String driveName, String accountId, String connectorId, String datasourceId, String docId, String clusterId) {
         String safeDrive = sanitize(driveName);
         String safeAccount = sanitize(accountId);
         String safeConnector = sanitize(connectorId);
         String safeDatasource = sanitize(datasourceId);
         String safeDoc = sanitize(docId);
-        
+
         String basePath = String.join("/",
-                sanitize(s3Config.keyPrefix()),
+                sanitize(keyPrefix),
                 safeDrive,
                 safeAccount,
                 safeConnector,
