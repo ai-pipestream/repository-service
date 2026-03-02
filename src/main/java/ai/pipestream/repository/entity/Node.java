@@ -50,6 +50,15 @@ public class Node extends PanacheEntityBase {
     @Column(name = "sha256_hash")
     public String sha256Hash;
 
+    @Column(name = "parent_id")
+    public Long parentId;
+
+    @Column(length = 2048)
+    public String path;
+
+    @Column(name = "node_type_id")
+    public Long nodeTypeId;
+
     @Column(nullable = false)
     public String status;  // PENDING, UPLOADING, ACTIVE, FAILED
 

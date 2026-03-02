@@ -9,6 +9,7 @@ import ai.pipestream.repository.kafka.RepositoryEventEmitter;
 import ai.pipestream.repository.s3.S3Config;
 import ai.pipestream.repository.service.DocumentStorageService;
 import ai.pipestream.repository.service.DriveService;
+import ai.pipestream.repository.service.NodeService;
 import io.grpc.Status;
 import io.quarkus.grpc.GrpcService;
 import io.quarkus.hibernate.reactive.panache.Panache;
@@ -64,6 +65,13 @@ public class FilesystemGrpcService extends MutinyFilesystemServiceGrpc.Filesyste
 
     @Inject
     RepositoryEventEmitter repositoryEventEmitter;
+
+    @Inject
+    NodeService nodeService;
+
+    @Inject
+    @ProtobufChannel("node-updates")
+    ProtobufEmitter<NodeUpdateNotification> nodeUpdateEmitter;
 
     // ---- CreateDrive ----
 
@@ -730,7 +738,483 @@ public class FilesystemGrpcService extends MutinyFilesystemServiceGrpc.Filesyste
                         .build());
     }
 
+    // ---- CreateFilesystemNode ----
+
+    @Override
+    @WithSession
+    public Uni<CreateFilesystemNodeResponse> createFilesystemNode(CreateFilesystemNodeRequest request) {
+        String driveName = request.getDrive();
+        String documentId = request.getDocumentId();
+
+        if (driveName == null || driveName.isBlank()) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("drive is required").asRuntimeException());
+        }
+        if (documentId == null || documentId.isBlank()) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("document_id is required").asRuntimeException());
+        }
+
+        return driveService.findByDriveId(driveName)
+                .flatMap(drive -> {
+                    if (drive == null) {
+                        return Uni.createFrom().failure(
+                                Status.NOT_FOUND.withDescription("Drive not found: " + driveName).asRuntimeException());
+                    }
+
+                    ai.pipestream.repository.entity.Node node = new ai.pipestream.repository.entity.Node();
+                    node.nodeId = documentId;
+                    node.drive = drive;
+                    node.name = request.getName();
+                    node.contentType = request.getContentType().isBlank() ? null : request.getContentType();
+                    node.metadata = request.getMetadata().isBlank() ? null : request.getMetadata();
+                    node.nodeTypeId = request.getNodeTypeId() > 0 ? request.getNodeTypeId() : 2L;
+                    node.parentId = request.getParentId() > 0 ? request.getParentId() : null;
+                    node.path = request.getPath().isBlank() ? null : request.getPath();
+
+                    return nodeService.createNode(node);
+                })
+                .map(persisted -> {
+                    emitNodeUpdate("CREATED", persisted, persisted.drive.driveId);
+                    return CreateFilesystemNodeResponse.newBuilder()
+                            .setNode(toProtoNode(persisted))
+                            .build();
+                });
+    }
+
+    // ---- GetNodeByPath ----
+
+    @Override
+    @WithSession
+    public Uni<GetNodeByPathResponse> getNodeByPath(GetNodeByPathRequest request) {
+        String driveName = request.getDrive();
+        String path = request.getPath();
+
+        if (driveName == null || driveName.isBlank()) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("drive is required").asRuntimeException());
+        }
+        if (path == null || path.isBlank()) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("path is required").asRuntimeException());
+        }
+
+        return driveService.findByDriveId(driveName)
+                .flatMap(drive -> {
+                    if (drive == null) {
+                        return Uni.createFrom().failure(
+                                Status.NOT_FOUND.withDescription("Drive not found: " + driveName).asRuntimeException());
+                    }
+                    return nodeService.findByDriveAndPath(drive.id, path);
+                })
+                .map(node -> {
+                    if (node == null) {
+                        throw Status.NOT_FOUND.withDescription("Node not found at path: " + path).asRuntimeException();
+                    }
+                    return GetNodeByPathResponse.newBuilder()
+                            .setNode(toProtoNode(node))
+                            .build();
+                });
+    }
+
+    // ---- UpdateFilesystemNode ----
+
+    @Override
+    @WithSession
+    public Uni<UpdateFilesystemNodeResponse> updateFilesystemNode(UpdateFilesystemNodeRequest request) {
+        String documentId = request.getDocumentId();
+
+        if (documentId == null || documentId.isBlank()) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("document_id is required").asRuntimeException());
+        }
+
+        return nodeService.findByNodeId(documentId)
+                .flatMap(node -> {
+                    if (node == null) {
+                        return Uni.createFrom().failure(
+                                Status.NOT_FOUND.withDescription("Node not found: " + documentId).asRuntimeException());
+                    }
+
+                    boolean nameChanged = false;
+                    if (!request.getName().isBlank()) {
+                        nameChanged = !request.getName().equals(node.name);
+                        node.name = request.getName();
+                    }
+                    if (!request.getContentType().isBlank()) {
+                        node.contentType = request.getContentType();
+                    }
+                    if (!request.getMetadata().isBlank()) {
+                        node.metadata = request.getMetadata();
+                    }
+                    node.updatedAt = Instant.now();
+
+                    if (nameChanged) {
+                        return nodeService.computePath(node)
+                                .flatMap(newPath -> {
+                                    node.path = newPath;
+                                    return Panache.withTransaction(() ->
+                                            node.<ai.pipestream.repository.entity.Node>persist()
+                                                    .flatMap(p -> nodeService.recomputeDescendantPaths(p).replaceWith(p))
+                                    );
+                                });
+                    }
+                    return Panache.withTransaction(() -> node.<ai.pipestream.repository.entity.Node>persist());
+                })
+                .map(persisted -> {
+                    emitNodeUpdate("UPDATED", persisted, persisted.drive != null ? persisted.drive.driveId : "");
+                    return UpdateFilesystemNodeResponse.newBuilder()
+                            .setNode(toProtoNode(persisted))
+                            .build();
+                });
+    }
+
+    // ---- DeleteFilesystemNode ----
+
+    @Override
+    @WithSession
+    public Uni<DeleteFilesystemNodeResponse> deleteFilesystemNode(DeleteFilesystemNodeRequest request) {
+        String documentId = request.getDocumentId();
+
+        if (documentId == null || documentId.isBlank()) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("document_id is required").asRuntimeException());
+        }
+
+        return nodeService.findByNodeId(documentId)
+                .flatMap(node -> {
+                    if (node == null) {
+                        return Uni.createFrom().failure(
+                                Status.NOT_FOUND.withDescription("Node not found: " + documentId).asRuntimeException());
+                    }
+
+                    String driveId = node.drive != null ? node.drive.driveId : "";
+                    return nodeService.deleteNode(node, request.getRecursive())
+                            .map(count -> {
+                                emitNodeUpdate("DELETED", node, driveId);
+                                return DeleteFilesystemNodeResponse.newBuilder()
+                                        .setSuccess(true)
+                                        .setDeletedCount(count)
+                                        .build();
+                            });
+                });
+    }
+
+    // ---- GetChildren ----
+
+    @Override
+    @WithSession
+    public Uni<GetChildrenResponse> getChildren(GetChildrenRequest request) {
+        String driveName = request.getDrive();
+
+        if (driveName == null || driveName.isBlank()) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("drive is required").asRuntimeException());
+        }
+
+        int pageSize = request.getPageSize() > 0 ? Math.min(request.getPageSize(), 100) : 20;
+        int page = parsePageToken(request.getPageToken());
+        Long parentId = request.getParentId() > 0 ? request.getParentId() : null;
+
+        return driveService.findByDriveId(driveName)
+                .flatMap(drive -> {
+                    if (drive == null) {
+                        return Uni.createFrom().failure(
+                                Status.NOT_FOUND.withDescription("Drive not found: " + driveName).asRuntimeException());
+                    }
+
+                    Uni<Long> countUni = nodeService.countChildren(drive.id, parentId);
+                    Uni<List<ai.pipestream.repository.entity.Node>> childrenUni =
+                            nodeService.getChildren(drive.id, parentId, page, pageSize,
+                                    request.getOrderBy(), request.getAscending());
+
+                    return Uni.combine().all().unis(countUni, childrenUni).asTuple();
+                })
+                .map(tuple -> {
+                    long totalCount = tuple.getItem1();
+                    List<ai.pipestream.repository.entity.Node> children = tuple.getItem2();
+
+                    GetChildrenResponse.Builder builder = GetChildrenResponse.newBuilder()
+                            .setTotalCount((int) totalCount);
+
+                    for (ai.pipestream.repository.entity.Node child : children) {
+                        builder.addNodes(toProtoNode(child));
+                    }
+
+                    if ((page + 1) * pageSize < totalCount) {
+                        builder.setNextPageToken(String.valueOf(page + 1));
+                    }
+
+                    return builder.build();
+                });
+    }
+
+    // ---- GetPath ----
+
+    @Override
+    @WithSession
+    public Uni<GetPathResponse> getPath(GetPathRequest request) {
+        String documentId = request.getDocumentId();
+
+        if (documentId == null || documentId.isBlank()) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("document_id is required").asRuntimeException());
+        }
+
+        return nodeService.findByNodeId(documentId)
+                .flatMap(node -> {
+                    if (node == null) {
+                        return Uni.createFrom().failure(
+                                Status.NOT_FOUND.withDescription("Node not found: " + documentId).asRuntimeException());
+                    }
+                    return nodeService.getAncestors(node);
+                })
+                .map(ancestors -> {
+                    GetPathResponse.Builder builder = GetPathResponse.newBuilder();
+                    for (ai.pipestream.repository.entity.Node ancestor : ancestors) {
+                        builder.addAncestors(toProtoNode(ancestor));
+                    }
+                    return builder.build();
+                });
+    }
+
+    // ---- GetTree ----
+
+    @Override
+    @WithSession
+    public Uni<GetTreeResponse> getTree(GetTreeRequest request) {
+        String driveName = request.getDrive();
+
+        if (driveName == null || driveName.isBlank()) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("drive is required").asRuntimeException());
+        }
+
+        int maxDepth = request.getMaxDepth() > 0 ? request.getMaxDepth() : 10;
+        String rootDocId = request.getRootDocumentId();
+
+        return driveService.findByDriveId(driveName)
+                .flatMap(drive -> {
+                    if (drive == null) {
+                        return Uni.createFrom().failure(
+                                Status.NOT_FOUND.withDescription("Drive not found: " + driveName).asRuntimeException());
+                    }
+
+                    if (rootDocId != null && !rootDocId.isBlank()) {
+                        // Tree from a specific node
+                        return nodeService.findByNodeId(rootDocId)
+                                .flatMap(root -> {
+                                    if (root == null) {
+                                        return Uni.createFrom().failure(
+                                                Status.NOT_FOUND.withDescription("Root node not found: " + rootDocId).asRuntimeException());
+                                    }
+                                    return nodeService.buildChildren(drive.id, root.id, maxDepth, 0)
+                                            .map(children -> buildTreeResponse(root, children));
+                                });
+                    } else {
+                        // Tree from drive root
+                        return nodeService.buildChildren(drive.id, null, maxDepth, 0)
+                                .map(children -> {
+                                    GetTreeResponse.Builder builder = GetTreeResponse.newBuilder();
+                                    for (NodeService.TreeEntry entry : children) {
+                                        builder.addChildren(toTreeNode(entry));
+                                    }
+                                    return builder.build();
+                                });
+                    }
+                });
+    }
+
+    // ---- MoveNode ----
+
+    @Override
+    @WithSession
+    public Uni<MoveNodeResponse> moveNode(MoveNodeRequest request) {
+        String documentId = request.getDocumentId();
+
+        if (documentId == null || documentId.isBlank()) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("document_id is required").asRuntimeException());
+        }
+
+        return nodeService.findByNodeId(documentId)
+                .flatMap(node -> {
+                    if (node == null) {
+                        return Uni.createFrom().failure(
+                                Status.NOT_FOUND.withDescription("Node not found: " + documentId).asRuntimeException());
+                    }
+                    Long newParentId = request.getNewParentId() > 0 ? request.getNewParentId() : null;
+                    String newName = request.getNewName().isBlank() ? null : request.getNewName();
+                    return nodeService.moveNode(node, newParentId, newName);
+                })
+                .map(moved -> {
+                    emitNodeUpdate("UPDATED", moved, moved.drive != null ? moved.drive.driveId : "");
+                    return MoveNodeResponse.newBuilder()
+                            .setNode(toProtoNode(moved))
+                            .build();
+                });
+    }
+
+    // ---- CopyNode ----
+
+    @Override
+    @WithSession
+    public Uni<CopyNodeResponse> copyNode(CopyNodeRequest request) {
+        String documentId = request.getDocumentId();
+
+        if (documentId == null || documentId.isBlank()) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("document_id is required").asRuntimeException());
+        }
+
+        return nodeService.findByNodeId(documentId)
+                .flatMap(source -> {
+                    if (source == null) {
+                        return Uni.createFrom().failure(
+                                Status.NOT_FOUND.withDescription("Node not found: " + documentId).asRuntimeException());
+                    }
+                    Long targetParentId = request.getTargetParentId() > 0 ? request.getTargetParentId() : null;
+                    String newName = request.getNewName().isBlank() ? null : request.getNewName();
+                    return nodeService.copyNode(source, targetParentId, newName, request.getDeep());
+                })
+                .map(copied -> {
+                    emitNodeUpdate("CREATED", copied, copied.drive != null ? copied.drive.driveId : "");
+                    return CopyNodeResponse.newBuilder()
+                            .setNode(toProtoNode(copied))
+                            .build();
+                });
+    }
+
+    // ---- FormatFilesystem ----
+
+    @Override
+    @WithSession
+    public Uni<FormatFilesystemResponse> formatFilesystem(FormatFilesystemRequest request) {
+        String driveName = request.getDrive();
+        String confirmation = request.getConfirmation();
+
+        if (driveName == null || driveName.isBlank()) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("drive is required").asRuntimeException());
+        }
+        if (!"DELETE_FILESYSTEM_DATA".equals(confirmation)) {
+            return Uni.createFrom().failure(
+                    Status.INVALID_ARGUMENT.withDescription("confirmation must be 'DELETE_FILESYSTEM_DATA'").asRuntimeException());
+        }
+
+        return driveService.findByDriveId(driveName)
+                .flatMap(drive -> {
+                    if (drive == null) {
+                        return Uni.createFrom().failure(
+                                Status.NOT_FOUND.withDescription("Drive not found: " + driveName).asRuntimeException());
+                    }
+
+                    Uni<Long> fileCountUni = nodeService.countByDriveAndType(drive.id, 2L);
+                    Uni<Long> folderCountUni = nodeService.countByDriveAndType(drive.id, 1L);
+
+                    if (request.getDryRun()) {
+                        return Uni.combine().all().unis(fileCountUni, folderCountUni,
+                                        nodeService.findAllByDrive(drive.id))
+                                .asTuple()
+                                .map(tuple -> {
+                                    long files = tuple.getItem1();
+                                    long folders = tuple.getItem2();
+                                    List<ai.pipestream.repository.entity.Node> nodes = tuple.getItem3();
+
+                                    FormatFilesystemResponse.Builder builder = FormatFilesystemResponse.newBuilder()
+                                            .setSuccess(true)
+                                            .setMessage("Dry run: would delete " + (files + folders) + " nodes")
+                                            .setNodesDeleted((int) files)
+                                            .setFoldersDeleted((int) folders);
+
+                                    for (ai.pipestream.repository.entity.Node n : nodes) {
+                                        if (n.path != null) {
+                                            builder.addDeletedPaths(n.path);
+                                        }
+                                    }
+                                    return builder.build();
+                                });
+                    }
+
+                    return Uni.combine().all().unis(fileCountUni, folderCountUni).asTuple()
+                            .flatMap(counts -> {
+                                long files = counts.getItem1();
+                                long folders = counts.getItem2();
+                                return nodeService.deleteAllForDrive(drive.id)
+                                        .map(deleted -> {
+                                            emitNodeUpdate("DELETED", null, drive.driveId);
+                                            return FormatFilesystemResponse.newBuilder()
+                                                    .setSuccess(true)
+                                                    .setMessage("Formatted filesystem for drive: " + driveName)
+                                                    .setNodesDeleted((int) files)
+                                                    .setFoldersDeleted((int) folders)
+                                                    .build();
+                                        });
+                            });
+                });
+    }
+
     // ---- Helpers ----
+
+    private Node toProtoNode(ai.pipestream.repository.entity.Node n) {
+        Node.Builder builder = Node.newBuilder();
+        if (n.id != null) builder.setId(n.id);
+        if (n.nodeId != null) builder.setDocumentId(n.nodeId);
+        if (n.drive != null && n.drive.id != null) builder.setDriveId(n.drive.id);
+        if (n.name != null) builder.setName(n.name);
+        if (n.nodeTypeId != null) builder.setNodeTypeId(n.nodeTypeId);
+        if (n.parentId != null) builder.setParentId(n.parentId);
+        if (n.path != null) builder.setPath(n.path);
+        if (n.contentType != null) builder.setContentType(n.contentType);
+        if (n.sizeBytes != null) builder.setSizeBytes(n.sizeBytes);
+        if (n.s3Key != null) builder.setS3Key(n.s3Key);
+        if (n.metadata != null) builder.setMetadata(n.metadata);
+        if (n.createdAt != null) builder.setCreatedAt(fromMillis(n.createdAt.toEpochMilli()));
+        if (n.updatedAt != null) builder.setUpdatedAt(fromMillis(n.updatedAt.toEpochMilli()));
+
+        // Set transient type field from nodeTypeId
+        if (n.nodeTypeId != null) {
+            builder.setType(n.nodeTypeId == 1 ? Node.NodeType.NODE_TYPE_FOLDER : Node.NodeType.NODE_TYPE_FILE);
+        }
+
+        return builder.build();
+    }
+
+    private void emitNodeUpdate(String updateType, ai.pipestream.repository.entity.Node node, String driveId) {
+        try {
+            NodeUpdateNotification.Builder notifBuilder = NodeUpdateNotification.newBuilder()
+                    .setUpdateType(updateType)
+                    .setDrive(driveId != null ? driveId : "")
+                    .setTimestamp(fromMillis(Instant.now().toEpochMilli()));
+            if (node != null) {
+                notifBuilder.setNode(toProtoNode(node));
+            }
+            nodeUpdateEmitter.send(notifBuilder.build());
+            LOG.infof("Emitted NodeUpdateNotification: type=%s, nodeId=%s, drive=%s",
+                    updateType, node != null ? node.nodeId : "null", driveId);
+        } catch (Exception e) {
+            LOG.warnf("Failed to emit NodeUpdateNotification: %s", e.getMessage());
+        }
+    }
+
+    private TreeNode toTreeNode(NodeService.TreeEntry entry) {
+        TreeNode.Builder builder = TreeNode.newBuilder()
+                .setNode(toProtoNode(entry.node()));
+        for (NodeService.TreeEntry child : entry.children()) {
+            builder.addChildren(toTreeNode(child));
+        }
+        return builder.build();
+    }
+
+    private GetTreeResponse buildTreeResponse(ai.pipestream.repository.entity.Node root,
+                                               List<NodeService.TreeEntry> children) {
+        GetTreeResponse.Builder builder = GetTreeResponse.newBuilder()
+                .setRoot(toProtoNode(root));
+        for (NodeService.TreeEntry entry : children) {
+            builder.addChildren(toTreeNode(entry));
+        }
+        return builder.build();
+    }
 
     private ai.pipestream.repository.filesystem.v1.Drive toProtoDrive(ai.pipestream.repository.entity.Drive d) {
         ai.pipestream.repository.filesystem.v1.Drive.Builder builder =
