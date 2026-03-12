@@ -231,11 +231,14 @@ public class DocumentStorageService {
             String versionId = putResponse.versionId();
 
             // 5. Persist to DB (Reactive Transaction with UPSERT pattern)
-            return Panache.<PipeDocRecord>withTransaction(() -> 
+            // Track whether this is an update (for event emission)
+            final boolean[] isUpdate = {false};
+            return Panache.<PipeDocRecord>withTransaction(() ->
                 PipeDocRecord.<PipeDocRecord>findById(nodeId)
                         .flatMap(existingRecord -> {
                             if (existingRecord != null) {
                                 // UPDATE existing record (new version)
+                                isUpdate[0] = true;
                                 LOG.debugf("Updating existing PipeDocRecord: node_id=%s", nodeId);
                                 existingRecord.objectKey = completeObjectKey;
                                 existingRecord.pipedocObjectKey = completeObjectKey;
@@ -286,6 +289,11 @@ public class DocumentStorageService {
                         connectorId,
                         finalDatasourceId
                 );
+
+                // Emit PipeDocUpdateNotification for OpenSearch indexing
+                eventEmitter.emitPipeDocUpdate(
+                        isUpdate[0] ? "UPDATED" : "CREATED",
+                        nodeId.toString(), finalDocId, null, null);
 
                 // Return node_id (UUID) as the repository identifier
                 return new StoredDocument(

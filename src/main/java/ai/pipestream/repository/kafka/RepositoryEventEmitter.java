@@ -6,6 +6,7 @@ import ai.pipestream.events.v1.IntakeRepoEvent;
 import ai.pipestream.events.v1.IntakeRepoEventType;
 import ai.pipestream.repository.filesystem.v1.RepositoryEvent;
 import ai.pipestream.repository.filesystem.v1.SourceContext;
+import ai.pipestream.repository.v1.PipeDocUpdateNotification;
 import com.google.protobuf.Timestamp;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -37,6 +38,10 @@ public class RepositoryEventEmitter {
     @Inject
     @ProtobufChannel("intake-repo-events-out")
     ProtobufEmitter<IntakeRepoEvent> intakeEventEmitter;
+
+    @Inject
+    @ProtobufChannel("pipedoc-updates-out")
+    ProtobufEmitter<PipeDocUpdateNotification> pipeDocUpdateEmitter;
 
     private static final String INTAKE_SOURCE_NODE_ID = "connector-intake";
 
@@ -257,6 +262,41 @@ public class RepositoryEventEmitter {
 
         emitter.send(event);
         LOG.infof("Emitted RepositoryEvent.Deleted: docId=%s, purged=%s", docId, purged);
+    }
+
+    /**
+     * Emit a PipeDocUpdateNotification after a PipeDoc is stored or updated.
+     *
+     * @param updateType "CREATED", "UPDATED", or "DELETED"
+     * @param storageId  Repository storage identifier (node UUID)
+     * @param docId      Original document ID from PipeDoc
+     * @param title      Document title (if available)
+     * @param author     Document author (if available)
+     */
+    public void emitPipeDocUpdate(String updateType, String storageId, String docId,
+                                   String title, String author) {
+        Instant now = Instant.now();
+        PipeDocUpdateNotification.Builder builder = PipeDocUpdateNotification.newBuilder()
+                .setUpdateType(updateType)
+                .setStorageId(storageId != null ? storageId : "")
+                .setDocId(docId != null ? docId : "")
+                .setTimestamp(now.toEpochMilli())
+                .setCreatedAt(toProtoTimestamp(now))
+                .setUpdatedAt(toProtoTimestamp(now));
+
+        if (title != null && !title.isBlank()) {
+            builder.setTitle(title);
+        }
+        if (author != null && !author.isBlank()) {
+            builder.setAuthor(author);
+        }
+
+        try {
+            pipeDocUpdateEmitter.send(builder.build());
+            LOG.debugf("Emitted PipeDocUpdateNotification: type=%s, storageId=%s, docId=%s", updateType, storageId, docId);
+        } catch (Exception e) {
+            LOG.warnf(e, "Failed to emit PipeDocUpdateNotification for docId=%s", docId);
+        }
     }
 
     /**
