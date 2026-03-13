@@ -2,8 +2,11 @@ package ai.pipestream.repository.entity;
 
 import io.quarkus.hibernate.reactive.panache.PanacheEntityBase;
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -91,7 +94,10 @@ public class PipeDocRecord extends PanacheEntityBase {
     @Column(nullable = false)
     public String filename;
 
+    @JdbcTypeCode(SqlTypes.ARRAY)
+    @Column(name = "acls")
+    public List<String> acls;
+
     @Column(name = "created_at", nullable = false)
     public Instant createdAt;
 }
-

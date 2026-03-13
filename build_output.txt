@@ -1,0 +1,343 @@
+
+> Configure project :
+Quarkus plugin detected - disabling Quarkus gRPC codegen (proto-toolchain handles code generation)
+
+> Task :clean
+
+> Task :fetchProtos
+Cleaning export directory: /work/core-services/repository-service/build/protos/export
+Checking out proto workspace from Git: https://github.com/ai-pipestream/pipestream-protos.git (ref=main)
+Registered module(s): admin, common, config, pipeline-module, repo
+Cloning into '/work/core-services/repository-service/build/protos/export'...
+Fetched 5 module(s) to /work/core-services/repository-service/build/protos/export
+
+> Task :buildDescriptors
+Building descriptors from workspace root for 39 proto file(s) across module(s): admin/proto, common/proto, config/proto, pipeline-module/proto, repo/proto
+Built descriptor file: /work/core-services/repository-service/build/descriptors/proto.desc
+
+> Task :prepareGenerators
+Using protoc: /home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protoc/4.33.2/8b8aed789933912593e7803e8961e33871e54633/protoc-4.33.2-linux-x86_64.exe
+Using protoc-gen-grpc-java: /home/krickert/.gradle/caches/modules-2/files-2.1/io.grpc/protoc-gen-grpc-java/1.77.0/404188d057725896431608df0491f1d93cfd59a8/protoc-gen-grpc-java-1.77.0-linux-x86_64.exe
+Resolving quarkus-grpc-protoc-plugin:3.32.2
+Created Mutiny generator wrapper (Unix): /work/core-services/repository-service/build/tmp/protoc-plugins/protoc-gen-mutiny
+Created Mutiny generator wrapper (Windows): /work/core-services/repository-service/build/tmp/protoc-plugins/protoc-gen-mutiny.bat
+Generated buf.gen.yaml at: /work/core-services/repository-service/build/buf.gen.yaml
+
+> Task :generateProtos
+Generating code from workspace root for 39 proto file(s) across module(s): admin/proto, common/proto, config/proto, pipeline-module/proto, repo/proto
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+WARNING: sun.misc.Unsafe::arrayBaseOffset has been called by com.google.protobuf.UnsafeUtil$MemoryAccessor (file:/home/krickert/.gradle/caches/modules-2/files-2.1/com.google.protobuf/protobuf-java/4.33.2/c85bf5de1ad10453792675f6515401f7b8eb6860/protobuf-java-4.33.2.jar)
+WARNING: Please consider reporting this to the maintainers of class com.google.protobuf.UnsafeUtil$MemoryAccessor
+WARNING: sun.misc.Unsafe::arrayBaseOffset will be removed in a future release
+Generated code to /work/core-services/repository-service/build/generated/source/proto/main/java
+
+> Task :processResources
+> Task :quarkusGenerateAppModel
+> Task :quarkusGenerateCode
+> Task :compileJava
+> Task :classes
+> Task :jar
+> Task :compileQuarkusTestGeneratedSourcesJava NO-SOURCE
+> Task :quarkusGenerateTestAppModel
+> Task :quarkusGenerateCodeTests
+> Task :compileTestJava
+> Task :copyDescriptorsToResources SKIPPED
+> Task :processTestResources
+> Task :testClasses
+Detected a split package usage which is considered a bad practice and should be avoided. Following packages were detected in multiple archives: 
+- "io.apicurio.registry.client" found in [io.apicurio:apicurio-registry-java-sdk:3.1.7, io.apicurio:apicurio-registry-v2-java-sdk:3.1.7]
+- "io.apicurio.registry.serde.protobuf.ref" found in [io.apicurio:apicurio-registry-protobuf-serde-kafka:3.1.7, io.apicurio:apicurio-registry-serde-common-protobuf:3.1.7]
+- "io.apicurio.registry.serde.protobuf" found in [io.apicurio:apicurio-registry-protobuf-serde-kafka:3.1.7, io.apicurio:apicurio-registry-serde-common-protobuf:3.1.7]
+At least one unused gRPC client interceptor found: ai.pipestream.quarkus.dynamicgrpc.auth.AuthMetadataInterceptor. If there are meant to be used globally, annotate them with @GlobalInterceptor.
+Failed to index io.apicurio.common.apps.config.Info: Class does not exist in ClassLoader QuarkusClassLoader:Deployment Class Loader: TEST for JUnitQuarkusTest-no-profile (QuarkusTest)@64a9d48c
+Unrecognized configuration key "quarkus.grpc.server.flow-control-window" was provided; it will be ignored; verify that the dependency extension for this configuration is set or that you did not make a typo
+Unrecognized configuration key "quarkus.grpc.server.use-virtual-threads" was provided; it will be ignored; verify that the dependency extension for this configuration is set or that you did not make a typo
+Unrecognized configuration key "quarkus.consul.host" was provided; it will be ignored; verify that the dependency extension for this configuration is set or that you did not make a typo
+Unrecognized configuration key "quarkus.consul.port" was provided; it will be ignored; verify that the dependency extension for this configuration is set or that you did not make a typo
+This Gauge has been already registered (MeterId{name='netty.eventexecutor.workers', tags=[]}), the registration will be ignored. Note that subsequent logs will be logged at debug level.
+HHH000247: ErrorCode: 0, SQLState: 23505
+ERROR: duplicate key value violates unique constraint "documents_document_id_key" (23505)
+HHH000247: ErrorCode: 0, SQLState: 23505
+ERROR: duplicate key value violates unique constraint "drives_drive_id_key" (23505)
+HHH000247: ErrorCode: 0, SQLState: 23505
+ERROR: duplicate key value violates unique constraint "nodes_node_id_key" (23505)
+HHH000247: ErrorCode: 0, SQLState: 23505
+ERROR: duplicate key value violates unique constraint "pipedocs_pkey" (23505)
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::loadLibrary has been called by io.netty.util.internal.NativeLibraryUtil in an unnamed module (file:/home/krickert/.gradle/caches/modules-2/files-2.1/io.netty/netty-common/4.1.130.Final/d4a1809fd03b560c82f7e35228e524fed96926f3/netty-common-4.1.130.Final.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+Failed to save PipeDoc
+ai.pipestream.repository.service.DocumentStorageService$AccountValidationException: Account not found or inactive: nonexistent
+	at ai.pipestream.repository.service.DocumentStorageService.lambda$store$0(DocumentStorageService.java:142)
+	at io.smallrye.context.impl.wrappers.SlowContextualFunction.apply(SlowContextualFunction.java:21)
+	at io.smallrye.mutiny.operators.uni.UniOnItemTransformToUni$UniOnItemTransformToUniProcessor.performInnerSubscription(UniOnItemTransformToUni.java:68)
+	at io.smallrye.mutiny.operators.uni.UniOnItemTransformToUni$UniOnItemTransformToUniProcessor.onItem(UniOnItemTransformToUni.java:57)
+	at io.smallrye.mutiny.operators.uni.UniOperatorProcessor.onItem(UniOperatorProcessor.java:47)
+	at io.smallrye.mutiny.operators.uni.UniOnItemTransform$UniOnItemTransformProcessor.onItem(UniOnItemTransform.java:43)
+	at io.smallrye.mutiny.operators.uni.UniOperatorProcessor.onItem(UniOperatorProcessor.java:47)
+	at io.smallrye.mutiny.operators.uni.builders.UniCreateFromKnownItem$KnownItemSubscription.forward(UniCreateFromKnownItem.java:42)
+	at io.smallrye.mutiny.operators.uni.builders.UniCreateFromKnownItem.subscribe(UniCreateFromKnownItem.java:23)
+	at io.smallrye.mutiny.operators.AbstractUni.subscribe(AbstractUni.java:35)
+	at io.smallrye.mutiny.operators.uni.UniOnFailureFlatMap$UniOnFailureFlatMapProcessor.performInnerSubscription(UniOnFailureFlatMap.java:104)
+	at io.smallrye.mutiny.operators.uni.UniOnFailureFlatMap$UniOnFailureFlatMapProcessor.dispatch(UniOnFailureFlatMap.java:86)
+	at io.smallrye.mutiny.operators.uni.UniOnFailureFlatMap$UniOnFailureFlatMapProcessor.onFailure(UniOnFailureFlatMap.java:63)
+	at io.smallrye.mutiny.operators.uni.UniOperatorProcessor.onFailure(UniOperatorProcessor.java:55)
+	at io.smallrye.mutiny.operators.uni.UniOperatorProcessor.onFailure(UniOperatorProcessor.java:55)
+	at io.smallrye.mutiny.operators.uni.builders.DefaultUniEmitter.fail(DefaultUniEmitter.java:53)
+	at io.quarkus.grpc.stubs.UniStreamObserver.onError(UniStreamObserver.java:21)
+	at io.grpc.stub.ClientCalls$StreamObserverToCallListenerAdapter.onClose(ClientCalls.java:581)
+	at io.vertx.grpc.client.VertxClientCall.lambda$doClose$4(VertxClientCall.java:139)
+	at io.vertx.grpc.client.VertxClientCall.doClose(VertxClientCall.java:142)
+	at io.vertx.grpc.client.VertxClientCall.lambda$null$1(VertxClientCall.java:113)
+	at io.vertx.core.impl.future.FutureImpl$4.onFailure(FutureImpl.java:188)
+	at io.vertx.core.impl.future.FutureBase.emitFailure(FutureBase.java:81)
+	at io.vertx.core.impl.future.FutureImpl.tryFail(FutureImpl.java:278)
+	at io.vertx.core.impl.future.Composition$1.onFailure(Composition.java:66)
+	at io.vertx.core.impl.future.FutureBase.emitFailure(FutureBase.java:81)
+	at io.vertx.core.impl.future.FailedFuture.addListener(FailedFuture.java:98)
+	at io.vertx.core.impl.future.Composition.onSuccess(Composition.java:43)
+	at io.vertx.core.impl.future.FutureBase.emitSuccess(FutureBase.java:66)
+	at io.vertx.core.impl.future.FutureImpl.tryComplete(FutureImpl.java:259)
+	at io.vertx.core.Promise.tryComplete(Promise.java:121)
+	at io.vertx.grpc.common.impl.GrpcReadStreamBase.handleEnd(GrpcReadStreamBase.java:263)
+	at io.vertx.grpc.client.impl.GrpcClientResponseImpl.handleEnd(GrpcClientResponseImpl.java:78)
+	at io.vertx.grpc.common.impl.GrpcReadStreamBase.lambda$init$3(GrpcReadStreamBase.java:91)
+	at io.vertx.core.streams.impl.InboundBuffer.handleEvent(InboundBuffer.java:279)
+	at io.vertx.core.streams.impl.InboundBuffer.write(InboundBuffer.java:157)
+	at io.vertx.grpc.common.impl.GrpcReadStreamBase.lambda$init$0(GrpcReadStreamBase.java:80)
+	at io.vertx.core.impl.ContextInternal.dispatch(ContextInternal.java:270)
+	at io.vertx.core.impl.ContextInternal.dispatch(ContextInternal.java:252)
+	at io.vertx.core.http.impl.HttpEventHandler.handleEnd(HttpEventHandler.java:76)
+	at io.vertx.core.http.impl.HttpClientResponseImpl.handleEnd(HttpClientResponseImpl.java:250)
+	at io.vertx.core.http.impl.Http2ClientConnection$StreamImpl.handleEnd(Http2ClientConnection.java:515)
+	at io.vertx.core.http.impl.VertxHttp2Stream.lambda$new$1(VertxHttp2Stream.java:65)
+	at io.vertx.core.streams.impl.InboundBuffer.handleEvent(InboundBuffer.java:279)
+	at io.vertx.core.streams.impl.InboundBuffer.write(InboundBuffer.java:157)
+	at io.vertx.core.impl.ContextImpl.emit(ContextImpl.java:342)
+	at io.vertx.core.impl.ContextImpl.lambda$emit$8(ContextImpl.java:349)
+	at io.netty.util.concurrent.AbstractEventExecutor.runTask(AbstractEventExecutor.java:173)
+	at io.netty.util.concurrent.AbstractEventExecutor.safeExecute(AbstractEventExecutor.java:166)
+	at io.netty.util.concurrent.SingleThreadEventExecutor.runAllTasks(SingleThreadEventExecutor.java:472)
+	at io.netty.channel.nio.NioEventLoop.run(NioEventLoop.java:569)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$4.run(SingleThreadEventExecutor.java:998)
+	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
+	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
+	at java.base@25.0.2/java.lang.Thread.run(Thread.java:1474)
+Account validation failed: Account not found or inactive: nonexistent
+Failed to upload PipeDoc
+io.grpc.StatusRuntimeException: PERMISSION_DENIED: Account not found or inactive: nonexistent
+	at io.grpc.Status.asRuntimeException(Status.java:524)
+	at ai.pipestream.repository.intake.NodeUploadGrpcService.lambda$uploadFilesystemPipeDoc$1(NodeUploadGrpcService.java:78)
+	at io.smallrye.context.impl.wrappers.SlowContextualFunction.apply(SlowContextualFunction.java:21)
+	at io.smallrye.mutiny.operators.uni.UniOnFailureTransform$UniOnFailureTransformProcessor.onFailure(UniOnFailureTransform.java:57)
+	at io.smallrye.mutiny.operators.uni.UniOperatorProcessor.onFailure(UniOperatorProcessor.java:55)
+	at io.smallrye.mutiny.operators.uni.UniOperatorProcessor.onFailure(UniOperatorProcessor.java:55)
+	at io.smallrye.mutiny.operators.uni.builders.UniCreateFromKnownFailure$KnownFailureSubscription.forward(UniCreateFromKnownFailure.java:42)
+	at io.smallrye.mutiny.operators.uni.builders.UniCreateFromKnownFailure.subscribe(UniCreateFromKnownFailure.java:23)
+	at io.smallrye.mutiny.operators.AbstractUni.subscribe(AbstractUni.java:35)
+	at io.smallrye.mutiny.operators.uni.UniOnItemTransformToUni$UniOnItemTransformToUniProcessor.performInnerSubscription(UniOnItemTransformToUni.java:81)
+	at io.smallrye.mutiny.operators.uni.UniOnItemTransformToUni$UniOnItemTransformToUniProcessor.onItem(UniOnItemTransformToUni.java:57)
+	at io.smallrye.mutiny.operators.uni.UniOperatorProcessor.onItem(UniOperatorProcessor.java:47)
+	at io.smallrye.mutiny.operators.uni.UniOnItemTransform$UniOnItemTransformProcessor.onItem(UniOnItemTransform.java:43)
+	at io.smallrye.mutiny.operators.uni.UniOperatorProcessor.onItem(UniOperatorProcessor.java:47)
+	at io.smallrye.mutiny.operators.uni.builders.UniCreateFromKnownItem$KnownItemSubscription.forward(UniCreateFromKnownItem.java:42)
+	at io.smallrye.mutiny.operators.uni.builders.UniCreateFromKnownItem.subscribe(UniCreateFromKnownItem.java:23)
+	at io.smallrye.mutiny.operators.AbstractUni.subscribe(AbstractUni.java:35)
+	at io.smallrye.mutiny.operators.uni.UniOnFailureFlatMap$UniOnFailureFlatMapProcessor.performInnerSubscription(UniOnFailureFlatMap.java:104)
+	at io.smallrye.mutiny.operators.uni.UniOnFailureFlatMap$UniOnFailureFlatMapProcessor.dispatch(UniOnFailureFlatMap.java:86)
+	at io.smallrye.mutiny.operators.uni.UniOnFailureFlatMap$UniOnFailureFlatMapProcessor.onFailure(UniOnFailureFlatMap.java:63)
+	at io.smallrye.mutiny.operators.uni.UniOperatorProcessor.onFailure(UniOperatorProcessor.java:55)
+	at io.smallrye.mutiny.operators.uni.UniOperatorProcessor.onFailure(UniOperatorProcessor.java:55)
+	at io.smallrye.mutiny.operators.uni.builders.DefaultUniEmitter.fail(DefaultUniEmitter.java:53)
+	at io.quarkus.grpc.stubs.UniStreamObserver.onError(UniStreamObserver.java:21)
+	at io.grpc.stub.ClientCalls$StreamObserverToCallListenerAdapter.onClose(ClientCalls.java:581)
+	at io.vertx.grpc.client.VertxClientCall.lambda$doClose$4(VertxClientCall.java:139)
+	at io.vertx.grpc.client.VertxClientCall.doClose(VertxClientCall.java:142)
+	at io.vertx.grpc.client.VertxClientCall.lambda$null$1(VertxClientCall.java:113)
+	at io.vertx.core.impl.future.FutureImpl$4.onFailure(FutureImpl.java:188)
+	at io.vertx.core.impl.future.FutureBase.emitFailure(FutureBase.java:81)
+	at io.vertx.core.impl.future.FutureImpl.tryFail(FutureImpl.java:278)
+	at io.vertx.core.impl.future.Composition$1.onFailure(Composition.java:66)
+	at io.vertx.core.impl.future.FutureBase.emitFailure(FutureBase.java:81)
+	at io.vertx.core.impl.future.FailedFuture.addListener(FailedFuture.java:98)
+	at io.vertx.core.impl.future.Composition.onSuccess(Composition.java:43)
+	at io.vertx.core.impl.future.FutureBase.emitSuccess(FutureBase.java:66)
+	at io.vertx.core.impl.future.FutureImpl.tryComplete(FutureImpl.java:259)
+	at io.vertx.core.Promise.tryComplete(Promise.java:121)
+	at io.vertx.grpc.common.impl.GrpcReadStreamBase.handleEnd(GrpcReadStreamBase.java:263)
+	at io.vertx.grpc.client.impl.GrpcClientResponseImpl.handleEnd(GrpcClientResponseImpl.java:78)
+	at io.vertx.grpc.common.impl.GrpcReadStreamBase.lambda$init$3(GrpcReadStreamBase.java:91)
+	at io.vertx.core.streams.impl.InboundBuffer.handleEvent(InboundBuffer.java:279)
+	at io.vertx.core.streams.impl.InboundBuffer.write(InboundBuffer.java:157)
+	at io.vertx.grpc.common.impl.GrpcReadStreamBase.lambda$init$0(GrpcReadStreamBase.java:80)
+	at io.vertx.core.impl.ContextInternal.dispatch(ContextInternal.java:270)
+	at io.vertx.core.impl.ContextInternal.dispatch(ContextInternal.java:252)
+	at io.vertx.core.http.impl.HttpEventHandler.handleEnd(HttpEventHandler.java:76)
+	at io.vertx.core.http.impl.HttpClientResponseImpl.handleEnd(HttpClientResponseImpl.java:250)
+	at io.vertx.core.http.impl.Http2ClientConnection$StreamImpl.handleEnd(Http2ClientConnection.java:515)
+	at io.vertx.core.http.impl.VertxHttp2Stream.lambda$new$1(VertxHttp2Stream.java:65)
+	at io.vertx.core.streams.impl.InboundBuffer.handleEvent(InboundBuffer.java:279)
+	at io.vertx.core.streams.impl.InboundBuffer.write(InboundBuffer.java:157)
+	at io.vertx.core.impl.ContextImpl.emit(ContextImpl.java:342)
+	at io.vertx.core.impl.ContextImpl.lambda$emit$8(ContextImpl.java:349)
+	at io.netty.util.concurrent.AbstractEventExecutor.runTask(AbstractEventExecutor.java:173)
+	at io.netty.util.concurrent.AbstractEventExecutor.safeExecute(AbstractEventExecutor.java:166)
+	at io.netty.util.concurrent.SingleThreadEventExecutor.runAllTasks(SingleThreadEventExecutor.java:472)
+	at io.netty.channel.nio.NioEventLoop.run(NioEventLoop.java:569)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$4.run(SingleThreadEventExecutor.java:998)
+	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
+	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
+	at java.base@25.0.2/java.lang.Thread.run(Thread.java:1474)
+> Task :test
+> Task :quarkusBuildAppModel
+Unrecognized configuration key "quarkus.grpc.server.flow-control-window" was provided; it will be ignored; verify that the dependency extension for this configuration is set or that you did not make a typo
+Unrecognized configuration key "quarkus.grpc.server.use-virtual-threads" was provided; it will be ignored; verify that the dependency extension for this configuration is set or that you did not make a typo
+Unrecognized configuration key "quarkus.grpc.codegen.enabled" was provided; it will be ignored; verify that the dependency extension for this configuration is set or that you did not make a typo
+Unrecognized configuration key "quarkus.consul.host" was provided; it will be ignored; verify that the dependency extension for this configuration is set or that you did not make a typo
+Unrecognized configuration key "quarkus.consul.port" was provided; it will be ignored; verify that the dependency extension for this configuration is set or that you did not make a typo
+Detected a split package usage which is considered a bad practice and should be avoided. Following packages were detected in multiple archives: 
+- "io.apicurio.registry.client" found in [io.apicurio:apicurio-registry-java-sdk:3.1.7, io.apicurio:apicurio-registry-v2-java-sdk:3.1.7]
+- "io.apicurio.registry.serde.protobuf.ref" found in [io.apicurio:apicurio-registry-protobuf-serde-kafka:3.1.7, io.apicurio:apicurio-registry-serde-common-protobuf:3.1.7]
+- "io.apicurio.registry.serde.protobuf" found in [io.apicurio:apicurio-registry-protobuf-serde-kafka:3.1.7, io.apicurio:apicurio-registry-serde-common-protobuf:3.1.7]
+At least one unused gRPC client interceptor found: ai.pipestream.quarkus.dynamicgrpc.auth.AuthMetadataInterceptor. If there are meant to be used globally, annotate them with @GlobalInterceptor.
+Failed to index io.apicurio.common.apps.config.Info: Class does not exist in ClassLoader QuarkusClassLoader:Deployment Class Loader: PROD for repository-service-0.0.1-SNAPSHOT@bcfd7dc
+> Task :quarkusAppPartsBuild
+> Task :quarkusDependenciesBuild
+> Task :quarkusBuild
+> Task :assemble
+> Task :check
+> Task :build
+
+[Incubating] Problems report is available at: file:///work/core-services/repository-service/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.4.0/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 31s
+19 actionable tasks: 19 executed
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.4.0/userguide/configuration_cache_enabling.html
