@@ -31,12 +31,12 @@ class NodeUploadGrpcServiceTest {
     @GrpcClient("repository-service")
     NodeUploadServiceGrpc.NodeUploadServiceBlockingStub uploadService;
 
-    private PipeDoc createTestDoc(String docId) {
+    private PipeDoc createTestDoc(String docId, String accountId) {
         return PipeDoc.newBuilder()
                 .setDocId(docId)
                 .setOwnership(OwnershipContext.newBuilder()
-                        .setAccountId("valid-account") // Matches stub in AccountManagerMock
-                        .setDatasourceId("test-datasource")
+                        .setAccountId(accountId)
+                        .setDatasourceId("ds-" + UUID.randomUUID().toString().substring(0, 8))
                         .setConnectorId("test-connector")
                         .build())
                 .build();
@@ -44,8 +44,9 @@ class NodeUploadGrpcServiceTest {
 
     @Test
     void uploadPipeDocStoresAndReturnsIdAndKey() {
-        String docId = UUID.randomUUID().toString();
-        PipeDoc doc = createTestDoc(docId);
+        String docId = "doc-" + UUID.randomUUID().toString();
+        // "valid-account" is stubbed in AccountManagerMock to return active=true
+        PipeDoc doc = createTestDoc(docId, "valid-account");
 
         UploadFilesystemPipeDocResponse response = uploadService.uploadFilesystemPipeDoc(
                 UploadFilesystemPipeDocRequest.newBuilder().setDocument(doc).build());
@@ -58,8 +59,8 @@ class NodeUploadGrpcServiceTest {
 
     @Test
     void getDocumentReturnsStoredDoc() {
-        String docId = UUID.randomUUID().toString();
-        PipeDoc doc = createTestDoc(docId);
+        String docId = "doc-" + UUID.randomUUID().toString();
+        PipeDoc doc = createTestDoc(docId, "valid-account");
         uploadService.uploadFilesystemPipeDoc(UploadFilesystemPipeDocRequest.newBuilder().setDocument(doc).build());
 
         GetUploadedDocumentResponse response = uploadService.getUploadedDocument(
@@ -74,18 +75,18 @@ class NodeUploadGrpcServiceTest {
     void getDocumentNotFoundReturnsNotFound() {
         assertThrows(StatusRuntimeException.class, () ->
                 uploadService.getUploadedDocument(GetUploadedDocumentRequest.newBuilder()
-                        .setDocumentId(UUID.randomUUID().toString())
+                        .setDocumentId("non-existent-" + UUID.randomUUID().toString())
                         .build()));
     }
 
     @Test
     void uploadPipeDocWithInvalidAccountFails() {
-        String docId = UUID.randomUUID().toString();
+        String docId = "doc-" + UUID.randomUUID().toString();
         PipeDoc doc = PipeDoc.newBuilder()
                 .setDocId(docId)
                 .setOwnership(OwnershipContext.newBuilder()
-                        .setAccountId("nonexistent") // Matches NOT_FOUND stub in AccountManagerMock
-                        .setDatasourceId("test-datasource")
+                        .setAccountId("nonexistent-" + UUID.randomUUID().toString()) // Should not match any stub
+                        .setDatasourceId("ds-" + UUID.randomUUID().toString().substring(0, 8))
                         .setConnectorId("test-connector")
                         .build())
                 .build();

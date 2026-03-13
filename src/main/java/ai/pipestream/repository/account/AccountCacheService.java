@@ -144,17 +144,18 @@ public class AccountCacheService {
         AccountEvent event = message.getPayload();
         String accountId = event.getAccountId();
 
+        Uni<Void> processingUni;
+
         switch (event.getOperationCase()) {
             case CREATED -> {
                 AccountEvent.Created created = event.getCreated();
                 cache.put(accountId, new CachedAccount(accountId, created.getName(), true));
                 LOG.infof("Account created: %s", accountId);
-                // Auto-create default drive for the new account
-                driveService.getOrCreateDefaultDrive(accountId)
-                        .subscribe().with(
-                                drive -> LOG.infof("Auto-created default drive for account %s: %s", accountId, drive.driveId),
-                                error -> LOG.warnf("Failed to auto-create default drive for account %s: %s", accountId, error.getMessage())
-                        );
+                // Auto-create default drive for the new account - chained to event lifecycle
+                processingUni = driveService.getOrCreateDefaultDrive(accountId)
+                        .invoke(drive -> LOG.infof("Auto-created default drive for account %s: %s", accountId, drive.driveId))
+                        .onFailure().invoke(error -> LOG.warnf("Failed to auto-create default drive for account %s: %s", accountId, error.getMessage()))
+                        .replaceWithVoid();
             }
             case UPDATED -> {
                 AccountEvent.Updated updated = event.getUpdated();
@@ -162,6 +163,7 @@ public class AccountCacheService {
                 boolean active = existing != null ? existing.active() : true;
                 cache.put(accountId, new CachedAccount(accountId, updated.getName(), active));
                 LOG.infof("Account updated: %s", accountId);
+                processingUni = Uni.createFrom().voidItem();
             }
             case INACTIVATED -> {
                 CachedAccount existing = cache.get(accountId);
@@ -169,6 +171,7 @@ public class AccountCacheService {
                     cache.put(accountId, new CachedAccount(accountId, existing.name(), false));
                 }
                 LOG.infof("Account inactivated: %s", accountId);
+                processingUni = Uni.createFrom().voidItem();
             }
             case REACTIVATED -> {
                 CachedAccount existing = cache.get(accountId);
@@ -176,11 +179,17 @@ public class AccountCacheService {
                     cache.put(accountId, new CachedAccount(accountId, existing.name(), true));
                 }
                 LOG.infof("Account reactivated: %s", accountId);
+                processingUni = Uni.createFrom().voidItem();
             }
-            default -> LOG.warnf("Unknown account event operation for %s: %s", accountId, event.getOperationCase());
+            default -> {
+                LOG.warnf("Unknown account event operation for %s: %s", accountId, event.getOperationCase());
+                processingUni = Uni.createFrom().voidItem();
+            }
         }
 
-        return Uni.createFrom().completionStage(message.ack());
+        return processingUni
+                .onItem().transformToUni(v -> Uni.createFrom().completionStage(message.ack()))
+                .onFailure().invoke(e -> LOG.errorf(e, "Failed to process account event for %s", accountId));
     }
 
     /**
