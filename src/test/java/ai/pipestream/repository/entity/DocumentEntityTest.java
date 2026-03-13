@@ -14,7 +14,6 @@ import static org.hamcrest.Matchers.*;
 
 /**
  * Real Hibernate CRUD tests for Document entity (no Mockito).
- * Updated for Reactive Panache.
  */
 @QuarkusTest
 public class DocumentEntityTest {
@@ -26,10 +25,12 @@ public class DocumentEntityTest {
     void testCreateAndFindDocument(TransactionalUniAsserter asserter) {
         LOG.info("Testing Document entity CRUD operations");
 
-        // Create a new document
         Document document = new Document();
         document.documentId = "test-doc-" + System.currentTimeMillis();
         document.title = "Test Document";
+        document.filename = "test-file.txt";
+        document.accountId = "test-account";
+        document.datasourceId = "test-ds";
         document.content = "This is test content";
         document.contentType = "text/plain";
         document.contentSize = 100L;
@@ -42,7 +43,6 @@ public class DocumentEntityTest {
 
         asserter.execute(() -> document.persist());
 
-        // Verify it was saved + lookups work
         asserter.assertThat(() -> Document.<Document>findById(document.id), foundById -> {
             assertThat(foundById, is(notNullValue()));
             assertThat(foundById.documentId, is(document.documentId));
@@ -61,10 +61,12 @@ public class DocumentEntityTest {
     void testDocumentUniqueConstraints(TransactionalUniAsserter asserter) {
         LOG.info("Testing Document unique constraints");
 
-        // Create first document
         Document doc1 = new Document();
         doc1.documentId = "unique-doc-" + System.currentTimeMillis();
         doc1.title = "Unique Document";
+        doc1.filename = "unique.txt";
+        doc1.accountId = "test-account";
+        doc1.datasourceId = "test-ds";
         doc1.contentType = "text/plain";
         doc1.contentSize = 50L;
         doc1.storageLocation = "/unique/location";
@@ -75,10 +77,12 @@ public class DocumentEntityTest {
         doc1.status = "ACTIVE";
         asserter.execute(() -> doc1.persist());
 
-        // Try to create document with same documentId - should fail
         Document doc2 = new Document();
-        doc2.documentId = doc1.documentId; // Same documentId as doc1
+        doc2.documentId = doc1.documentId;
         doc2.title = "Different Title";
+        doc2.filename = "diff.txt";
+        doc2.accountId = "test-account";
+        doc2.datasourceId = "test-ds";
         doc2.contentType = "text/plain";
         doc2.contentSize = 25L;
         doc2.storageLocation = "/different/location";
@@ -104,10 +108,12 @@ public class DocumentEntityTest {
     void testDocumentUpdateOperations(TransactionalUniAsserter asserter) {
         LOG.info("Testing Document update operations");
 
-        // Create a document
         Document document = new Document();
         document.documentId = "update-doc-" + System.currentTimeMillis();
         document.title = "Original Title";
+        document.filename = "original.txt";
+        document.accountId = "test-account";
+        document.datasourceId = "test-ds";
         document.content = "Original content";
         document.contentType = "text/plain";
         document.contentSize = 100L;
@@ -122,7 +128,6 @@ public class DocumentEntityTest {
 
         Instant originalCreated = document.createdAt;
 
-        // Update via JPQL update (avoid relying on attached entity state across transactions)
         document.title = "Updated Title";
         document.content = "Updated content";
         document.contentSize = 150L;
@@ -150,10 +155,12 @@ public class DocumentEntityTest {
     void testDocumentStatusQueries(TransactionalUniAsserter asserter) {
         LOG.info("Testing Document status-based queries");
 
-        // Create documents with different statuses
         Document activeDoc = new Document();
         activeDoc.documentId = "active-doc-" + System.currentTimeMillis();
         activeDoc.title = "Active Document";
+        activeDoc.filename = "active.txt";
+        activeDoc.accountId = "test-account";
+        activeDoc.datasourceId = "test-ds";
         activeDoc.contentType = "text/plain";
         activeDoc.contentSize = 50L;
         activeDoc.storageLocation = "/active/location";
@@ -167,7 +174,9 @@ public class DocumentEntityTest {
         Document inactiveDoc = new Document();
         inactiveDoc.documentId = "inactive-doc-" + System.currentTimeMillis();
         inactiveDoc.title = "Inactive Document";
-        inactiveDoc.contentType = "text/plain";
+        inactiveDoc.filename = "inactive.txt";
+        inactiveDoc.accountId = "test-account";
+        inactiveDoc.datasourceId = "test-ds";
         inactiveDoc.contentSize = 25L;
         inactiveDoc.storageLocation = "/inactive/location";
         inactiveDoc.checksum = "inactive123";
@@ -175,6 +184,7 @@ public class DocumentEntityTest {
         inactiveDoc.updatedAt = Instant.now();
         inactiveDoc.version = 1;
         inactiveDoc.status = "DELETED";
+        inactiveDoc.contentType = "text/plain";
         asserter.execute(() -> inactiveDoc.persist());
 
         asserter.assertThat(() -> Document.<Document>list("status", "ACTIVE"), activeDocuments -> {

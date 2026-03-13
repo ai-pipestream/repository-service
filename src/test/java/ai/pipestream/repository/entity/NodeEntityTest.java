@@ -13,7 +13,6 @@ import static org.hamcrest.Matchers.*;
 
 /**
  * Real Hibernate CRUD tests for Node entity (no Mockito).
- * Updated for Reactive Panache.
  */
 @QuarkusTest
 public class NodeEntityTest {
@@ -25,7 +24,6 @@ public class NodeEntityTest {
     void testCreateAndFindNode(TransactionalUniAsserter asserter) {
         LOG.info("Testing Node entity CRUD operations");
 
-        // First create a drive for the node
         Drive drive = new Drive();
         drive.driveId = "node-test-drive-" + System.currentTimeMillis();
         drive.name = "Node Test Drive";
@@ -34,7 +32,6 @@ public class NodeEntityTest {
         drive.updatedAt = Instant.now();
         asserter.execute(() -> drive.persist());
 
-        // Create a new node
         Node node = new Node();
         node.nodeId = "test-node-" + System.currentTimeMillis();
         node.drive = drive;
@@ -49,7 +46,6 @@ public class NodeEntityTest {
         node.createdAt = Instant.now();
         node.updatedAt = Instant.now();
 
-        // Persist the node
         asserter.execute(() -> node.persist());
 
         asserter.assertThat(() -> Node.<Node>findById(node.id), foundById -> {
@@ -70,7 +66,6 @@ public class NodeEntityTest {
     void testNodeWithDocumentRelationship(TransactionalUniAsserter asserter) {
         LOG.info("Testing Node with Document relationship");
 
-        // Create drive and document first
         Drive drive = new Drive();
         drive.driveId = "relation-drive-" + System.currentTimeMillis();
         drive.name = "Relation Test Drive";
@@ -82,6 +77,9 @@ public class NodeEntityTest {
         Document document = new Document();
         document.documentId = "relation-doc-" + System.currentTimeMillis();
         document.title = "Related Document";
+        document.filename = "related.txt";
+        document.accountId = "test-account";
+        document.datasourceId = "test-ds";
         document.contentType = "text/plain";
         document.contentSize = 100L;
         document.storageLocation = "/relation/location";
@@ -92,7 +90,6 @@ public class NodeEntityTest {
         document.status = "ACTIVE";
         asserter.execute(() -> document.persist());
 
-        // Create node linked to both drive and document
         Node node = new Node();
         node.nodeId = "relation-node-" + System.currentTimeMillis();
         node.drive = drive;
@@ -117,7 +114,6 @@ public class NodeEntityTest {
     void testNodeUniqueConstraints(TransactionalUniAsserter asserter) {
         LOG.info("Testing Node unique constraints");
 
-        // Create drive first
         Drive drive = new Drive();
         drive.driveId = "constraint-drive-" + System.currentTimeMillis();
         drive.name = "Constraint Test Drive";
@@ -126,7 +122,6 @@ public class NodeEntityTest {
         drive.updatedAt = Instant.now();
         asserter.execute(() -> drive.persist());
 
-        // Create first node
         Node node1 = new Node();
         node1.nodeId = "unique-node-" + System.currentTimeMillis();
         node1.drive = drive;
@@ -136,9 +131,8 @@ public class NodeEntityTest {
         node1.updatedAt = Instant.now();
         asserter.execute(() -> node1.persist());
 
-        // Try to create node with same nodeId - should fail
         Node node2 = new Node();
-        node2.nodeId = node1.nodeId; // Same nodeId as node1
+        node2.nodeId = node1.nodeId;
         node2.drive = drive;
         node2.name = "different-name.txt";
         node2.status = "ACTIVE";
@@ -161,7 +155,6 @@ public class NodeEntityTest {
     void testNodeStatusQueries(TransactionalUniAsserter asserter) {
         LOG.info("Testing Node status-based queries");
 
-        // Create drive first
         Drive drive = new Drive();
         drive.driveId = "status-drive-" + System.currentTimeMillis();
         drive.name = "Status Test Drive";
@@ -170,7 +163,6 @@ public class NodeEntityTest {
         drive.updatedAt = Instant.now();
         asserter.execute(() -> drive.persist());
 
-        // Create nodes with different statuses
         Node activeNode = new Node();
         activeNode.nodeId = "active-node-" + System.currentTimeMillis();
         activeNode.drive = drive;
