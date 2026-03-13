@@ -196,7 +196,7 @@ public class DocumentStorageService {
                                     }))
             ).map(persisted -> {
                 eventEmitter.emitCreated(finalDocId, accountId, completeObjectKey, completeObjectKey, sizeBytes, checksum, resolvedBucket, putResponse.versionId(), resolvedRequestId, connectorId, finalDatasourceId);
-                eventEmitter.emitPipeDocUpdate(isUpdate[0] ? "UPDATED" : "CREATED", nodeId.toString(), finalDocId, null, null);
+                eventEmitter.emitPipeDocUpdate(isUpdate[0] ? "UPDATED" : "CREATED", nodeId.toString(), finalDocId, docToStore.hasSearchMetadata() ? docToStore.getSearchMetadata().getTitle() : null, null, docToStore.getOwnership());
                 return new StoredDocument(nodeId.toString(), completeObjectKey, putResponse.versionId(), putResponse.eTag(), sizeBytes, checksum, persisted.createdAt.toEpochMilli());
             });
         });
