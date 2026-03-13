@@ -8,13 +8,14 @@ import jakarta.inject.Inject;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.eclipse.microprofile.config.ConfigProvider;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.time.Duration;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -28,13 +29,18 @@ class AccountEventKafkaIntegrationTest {
     @Inject
     AccountCacheService accountCacheService;
 
+    @BeforeEach
+    void setUp() {
+        accountCacheService.resetCache();
+    }
+
     @Test
     void accountEventProducedToKafkaIsConsumedByCache() throws Exception {
         String accountId = "kafka-test-" + UUID.randomUUID();
 
         // Verify account is NOT in cache initially
         boolean initiallyValid = accountCacheService.isValidAccount(accountId).await().indefinitely();
-        assert !initiallyValid : "Account should not be in cache initially";
+        assertFalse(initiallyValid, "Account should not be in cache initially");
 
         // Get the Kafka bootstrap servers from the running config
         String bootstrapServers = ConfigProvider.getConfig()

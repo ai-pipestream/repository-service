@@ -211,16 +211,20 @@ public class AccountCacheService {
 
         CachedAccount cached = cache.get(accountId);
         if (cached != null) {
+            LOG.debugf("Account found in cache: %s (active=%s)", accountId, cached.active());
             return Uni.createFrom().item(cached.active());
         }
 
         // Cache miss - lookup via gRPC
+        LOG.debugf("Account cache miss, looking up: %s", accountId);
         return lookupAccount(accountId)
                 .map(account -> {
                     if (account != null) {
+                        LOG.debugf("Account found via gRPC: %s (active=%s)", accountId, account.getActive());
                         cache.put(accountId, CachedAccount.from(account));
                         return account.getActive();
                     }
+                    LOG.debugf("Account not found via gRPC: %s", accountId);
                     return false;
                 })
                 .onFailure().recoverWithItem(error -> {
@@ -254,5 +258,13 @@ public class AccountCacheService {
      */
     public boolean isWarmupComplete() {
         return warmupComplete.get();
+    }
+
+    /**
+     * Reset the cache (for testing isolation).
+     */
+    public void resetCache() {
+        cache.clear();
+        warmupComplete.set(false);
     }
 }

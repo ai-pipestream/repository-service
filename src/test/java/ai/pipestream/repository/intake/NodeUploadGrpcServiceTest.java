@@ -7,14 +7,17 @@ import ai.pipestream.repository.filesystem.upload.v1.GetUploadedDocumentResponse
 import ai.pipestream.repository.filesystem.upload.v1.NodeUploadServiceGrpc;
 import ai.pipestream.repository.filesystem.upload.v1.UploadFilesystemPipeDocRequest;
 import ai.pipestream.repository.filesystem.upload.v1.UploadFilesystemPipeDocResponse;
+import ai.pipestream.repository.account.AccountCacheService;
 import ai.pipestream.test.support.S3TestResource;
 import ai.pipestream.test.support.RepositoryWireMockTestResource;
 import io.grpc.StatusRuntimeException;
 import io.quarkus.grpc.GrpcClient;
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import jakarta.inject.Inject;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -30,6 +33,14 @@ class NodeUploadGrpcServiceTest {
 
     @GrpcClient("repository-service")
     NodeUploadServiceGrpc.NodeUploadServiceBlockingStub uploadService;
+
+    @Inject
+    AccountCacheService accountCacheService;
+
+    @BeforeEach
+    void setUp() {
+        accountCacheService.resetCache();
+    }
 
     private PipeDoc createTestDoc(String docId, String accountId) {
         return PipeDoc.newBuilder()

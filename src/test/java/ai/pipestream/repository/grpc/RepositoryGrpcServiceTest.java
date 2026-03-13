@@ -5,11 +5,13 @@ import ai.pipestream.data.v1.PipeDoc;
 import ai.pipestream.test.support.S3TestResource;
 import ai.pipestream.repository.pipedoc.v1.*;
 import ai.pipestream.repository.util.PipeDocUuidGenerator;
+import ai.pipestream.repository.account.AccountCacheService;
 import ai.pipestream.test.support.RepositoryWireMockTestResource;
 import io.quarkus.grpc.GrpcClient;
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.UUID;
@@ -31,6 +33,14 @@ class RepositoryGrpcServiceTest {
 
     @Inject
     PipeDocUuidGenerator uuidGenerator;
+
+    @Inject
+    AccountCacheService accountCacheService;
+
+    @BeforeEach
+    void setUp() {
+        accountCacheService.resetCache();
+    }
 
     private PipeDoc createTestDoc(String docId, String accountId, String datasourceId, String connectorId) {
         return PipeDoc.newBuilder()

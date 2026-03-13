@@ -7,9 +7,13 @@ import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.vertx.RunOnVertxContext;
 import io.quarkus.test.vertx.UniAsserter;
 import org.eclipse.microprofile.reactive.messaging.Message;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import jakarta.inject.Inject;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
 @QuarkusTestResource(RepositoryWireMockTestResource.class)
@@ -17,6 +21,11 @@ class AccountCacheServiceTest {
 
     @Inject
     AccountCacheService accountCacheService;
+
+    @BeforeEach
+    void setUp() {
+        accountCacheService.resetCache();
+    }
 
     @Test
     @RunOnVertxContext
@@ -26,7 +35,7 @@ class AccountCacheServiceTest {
         asserter.assertThat(
             () -> accountCacheService.isValidAccount(accountId),
             initiallyValid -> {
-                assert !initiallyValid : "Cache miss should return false before account event";
+                assertFalse(initiallyValid, "Cache miss should return false before account event");
             }
         );
 
@@ -46,7 +55,7 @@ class AccountCacheServiceTest {
         asserter.assertThat(
             () -> accountCacheService.isValidAccount(accountId),
             afterEventValid -> {
-                assert afterEventValid : "Cache should be updated by account event after miss";
+                assertTrue(afterEventValid, "Cache should be updated by account event after miss");
             }
         );
     }
