@@ -265,6 +265,13 @@ public class RawUploadResource {
                                 datasourceId
                             );
 
+                            // Emit raw upload event for tracking binary data arrival
+                            eventEmitter.emitDocumentUploaded(
+                                resolvedDocId, accountId, blobObjectKey,
+                                resolvedConnectorId, resolvedFilename, resolvedContentType,
+                                null, null, null
+                            );
+
                             return new RawUploadReceipt(
                                     resolvedDocId,
                                     resolvedChecksum,

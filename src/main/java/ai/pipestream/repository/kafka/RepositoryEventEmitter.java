@@ -2,6 +2,7 @@ package ai.pipestream.repository.kafka;
 
 import ai.pipestream.apicurio.registry.protobuf.ProtobufChannel;
 import ai.pipestream.apicurio.registry.protobuf.ProtobufEmitter;
+import ai.pipestream.events.v1.DocumentUploadedEvent;
 import ai.pipestream.events.v1.IntakeRepoEvent;
 import ai.pipestream.events.v1.IntakeRepoEventType;
 import ai.pipestream.repository.filesystem.v1.RepositoryEvent;
@@ -41,6 +42,10 @@ public class RepositoryEventEmitter {
     @ProtobufChannel("pipedoc-updates-out")
     ProtobufEmitter<PipeDocUpdateNotification> pipeDocUpdateEmitter;
 
+    @Inject
+    @ProtobufChannel("document-uploaded-events-out")
+    ProtobufEmitter<DocumentUploadedEvent> documentUploadedEmitter;
+
     private static final String INTAKE_SOURCE_NODE_ID = "connector-intake";
 
     public void emitCreated(String docId, String accountId, String s3Key, String pipedocS3Key, long sizeBytes, String contentHash, String bucket, String versionId, String requestId, String connectorId) {
@@ -59,6 +64,32 @@ public class RepositoryEventEmitter {
         emitter.send(event);
         if (connectorId != null && !connectorId.isBlank() && datasourceId != null && !datasourceId.isBlank()) {
             emitIntakeRepoCreated(eventId, now, docId, accountId, connectorId, datasourceId, versionId);
+        }
+    }
+
+    /**
+     * Emits a DocumentUploadedEvent tracking raw binary data arrival in storage.
+     */
+    public void emitDocumentUploaded(String docId, String accountId, String s3Key, String connectorId,
+                                      String filename, String mimeType, String path,
+                                      Instant creationDate, Instant lastModifiedDate) {
+        try {
+            DocumentUploadedEvent.Builder builder = DocumentUploadedEvent.newBuilder()
+                    .setDocId(docId)
+                    .setS3Key(s3Key)
+                    .setAccountId(accountId);
+
+            if (connectorId != null && !connectorId.isEmpty()) builder.setConnectorId(connectorId);
+            if (filename != null && !filename.isEmpty()) builder.setFilename(filename);
+            if (mimeType != null && !mimeType.isEmpty()) builder.setMimeType(mimeType);
+            if (path != null && !path.isEmpty()) builder.setPath(path);
+            if (creationDate != null) builder.setCreationDate(toProtoTimestamp(creationDate));
+            if (lastModifiedDate != null) builder.setLastModifiedDate(toProtoTimestamp(lastModifiedDate));
+
+            documentUploadedEmitter.send(builder.build());
+            LOG.debugf("Emitted DocumentUploadedEvent: docId=%s, filename=%s, mimeType=%s", docId, filename, mimeType);
+        } catch (Exception e) {
+            LOG.warnf(e, "Failed to emit DocumentUploadedEvent for docId=%s", docId);
         }
     }
 
