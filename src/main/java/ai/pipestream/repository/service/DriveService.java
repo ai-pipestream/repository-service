@@ -125,6 +125,22 @@ public class DriveService {
     }
 
     /**
+     * Resolves a bucket name from the in-memory drive cache only (no DB lookup).
+     * Returns the default bucket if the drive is not cached.
+     * Safe to call without a reactive session.
+     */
+    public String resolveBucketFromCache(String driveName, String defaultBucket) {
+        if (driveName == null || driveName.isBlank() || DEFAULT_DRIVE_NAME.equals(driveName)) {
+            return defaultBucket;
+        }
+        Drive cached = driveCache.get(driveName);
+        if (cached != null) {
+            return cached.s3Bucket;
+        }
+        return defaultBucket;
+    }
+
+    /**
      * List drives for a specific account.
      *
      * @param accountId the account ID to filter by

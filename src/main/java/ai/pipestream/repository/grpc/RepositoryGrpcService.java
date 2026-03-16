@@ -255,7 +255,6 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
     }
 
     @Override
-    @WithSession
     public Uni<GetBlobResponse> getBlob(GetBlobRequest request) {
         if (!request.hasStorageRef()) {
             return Uni.createFrom().failure(new IllegalArgumentException("FileStorageReference is required"));
@@ -274,9 +273,13 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
 
         LOG.debugf("Fetching blob from S3: drive=%s, object_key=%s", driveName, objectKey);
 
-        // Resolve drive to get correct S3 bucket
-        return driveService.resolveDrive(driveName, null)
-        .flatMap(resolvedDrive -> {
+        // GetBlob uses the object_key directly — it already contains the full S3 path.
+        // Resolve bucket from drive cache if available, otherwise use default bucket.
+        // Note: we avoid DB lookups here since this method may be called without a reactive session.
+        String bucket = driveService.resolveBucketFromCache(driveName, s3Config.bucket());
+        return Uni.createFrom().item(bucket)
+        .flatMap(resolvedBucket -> {
+            DriveService.ResolvedDrive resolvedDrive = new DriveService.ResolvedDrive(resolvedBucket, s3Config.keyPrefix(), driveName);
             GetObjectRequest.Builder requestBuilder = GetObjectRequest.builder()
                     .bucket(resolvedDrive.bucket())
                     .key(objectKey);
