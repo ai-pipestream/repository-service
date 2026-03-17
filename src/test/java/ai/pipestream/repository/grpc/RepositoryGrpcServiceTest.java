@@ -39,7 +39,7 @@ class RepositoryGrpcServiceTest {
 
     @BeforeEach
     void setUp() {
-        accountCacheService.resetCache();
+        accountCacheService.resetCache().await().indefinitely();
     }
 
     private PipeDoc createTestDoc(String docId, String accountId, String datasourceId, String connectorId) {

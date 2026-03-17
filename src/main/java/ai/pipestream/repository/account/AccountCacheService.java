@@ -4,16 +4,12 @@ import ai.pipestream.quarkus.dynamicgrpc.DynamicGrpcClientFactory;
 import ai.pipestream.repository.account.v1.Account;
 import ai.pipestream.repository.account.v1.AccountEvent;
 import ai.pipestream.repository.account.v1.GetAccountRequest;
-import ai.pipestream.repository.account.v1.ListAccountsRequest;
 import ai.pipestream.repository.account.v1.MutinyAccountServiceGrpc;
-import ai.pipestream.repository.account.v1.StreamAllAccountsRequest;
-import ai.pipestream.repository.account.v1.StreamAllAccountsResponse;
-import io.quarkus.runtime.StartupEvent;
+import io.quarkus.cache.CacheInvalidate;
+import io.quarkus.cache.CacheInvalidateAll;
+import io.quarkus.cache.CacheResult;
 import io.smallrye.mutiny.Uni;
-import io.grpc.Status;
-import io.grpc.StatusRuntimeException;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.reactive.messaging.Incoming;
@@ -22,26 +18,17 @@ import org.jboss.logging.Logger;
 
 import ai.pipestream.repository.service.DriveService;
 
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
-
 /**
- * Caches account information locally for fast validation.
- *
- * Cache is populated via:
- * 1. Kafka listener for account lifecycle events
- * 2. Non-blocking startup cache warming via StreamAllAccounts gRPC call
- * 3. On-demand gRPC lookup on cache miss
+ * Validates account existence and active status with Caffeine TTL caching.
+ * <p>
+ * Uses {@code @CacheResult} for simple TTL-based caching of account lookups.
+ * Kafka account events invalidate the cache entry so the next lookup gets fresh data.
+ * The CREATED event also triggers auto-creation of the default drive.
  */
 @ApplicationScoped
 public class AccountCacheService {
 
     private static final Logger LOG = Logger.getLogger(AccountCacheService.class);
-    private static final int PAGE_SIZE = 100;
-
-    private final ConcurrentHashMap<String, CachedAccount> cache = new ConcurrentHashMap<>();
-    private final AtomicBoolean warmupComplete = new AtomicBoolean(false);
 
     @Inject
     DynamicGrpcClientFactory grpcClientFactory;
@@ -53,148 +40,7 @@ public class AccountCacheService {
     boolean validationEnabled;
 
     /**
-     * Cached account entry with active status.
-     */
-    public record CachedAccount(String accountId, String name, boolean active) {
-        static CachedAccount from(Account account) {
-            return new CachedAccount(account.getAccountId(), account.getName(), account.getActive());
-        }
-    }
-
-    /**
-     * Warm the cache at startup by loading all accounts.
-     * Non-blocking - does not delay startup.
-     */
-    void onStartup(@Observes StartupEvent event) {
-        LOG.info("Starting non-blocking account cache warmup...");
-        warmCache()
-                .subscribe().with(
-                        count -> {
-                            warmupComplete.set(true);
-                            LOG.infof("Account cache warmup complete. Loaded %d accounts.", count);
-                        },
-                        error -> {
-                            warmupComplete.set(true);
-                            LOG.warnf("Account cache warmup failed (will use on-demand lookup): %s", error.getMessage());
-                        }
-                );
-    }
-
-    /**
-     * Stream all accounts to warm the cache.
-     */
-    private Uni<Integer> warmCache() {
-        return grpcClientFactory.getClient("account-manager", MutinyAccountServiceGrpc::newMutinyStub)
-                .flatMap(client -> client.streamAllAccounts(StreamAllAccountsRequest.newBuilder()
-                        .setIncludeInactive(false)
-                        .build())
-                    .onItem().invoke(response -> {
-                        if (response.hasAccount()) {
-                            Account account = response.getAccount();
-                            cache.put(account.getAccountId(), CachedAccount.from(account));
-                        }
-                    })
-                    .collect().with(Collectors.counting())
-                    .map(Long::intValue))
-                .onFailure(this::isUnimplementedStream)
-                .recoverWithUni(() -> warmCachePaged(""));
-    }
-
-    private boolean isUnimplementedStream(Throwable error) {
-        if (error instanceof StatusRuntimeException statusException) {
-            return statusException.getStatus().getCode() == Status.Code.UNIMPLEMENTED;
-        }
-        return false;
-    }
-
-    /**
-     * Recursively pages through all accounts to warm the cache.
-     */
-    private Uni<Integer> warmCachePaged(String pageToken) {
-        return grpcClientFactory.getClient("account-manager", MutinyAccountServiceGrpc::newMutinyStub)
-                .flatMap(client -> {
-                    ListAccountsRequest.Builder request = ListAccountsRequest.newBuilder()
-                            .setPageSize(PAGE_SIZE)
-                            .setIncludeInactive(false);
-                    if (pageToken != null && !pageToken.isEmpty()) {
-                        request.setPageToken(pageToken);
-                    }
-                    return client.listAccounts(request.build());
-                })
-                .flatMap(response -> {
-                    int loaded = 0;
-                    for (Account account : response.getAccountsList()) {
-                        cache.put(account.getAccountId(), CachedAccount.from(account));
-                        loaded++;
-                    }
-                    String nextToken = response.getNextPageToken();
-                    if (nextToken != null && !nextToken.isEmpty()) {
-                        int currentLoaded = loaded;
-                        return warmCachePaged(nextToken).map(next -> currentLoaded + next);
-                    }
-                    return Uni.createFrom().item(loaded);
-                });
-    }
-
-    /**
-     * Handle account events from Kafka.
-     */
-    @Incoming("account-events-in")
-    public Uni<Void> handleAccountEvent(Message<AccountEvent> message) {
-        AccountEvent event = message.getPayload();
-        String accountId = event.getAccountId();
-
-        Uni<Void> processingUni;
-
-        switch (event.getOperationCase()) {
-            case CREATED -> {
-                AccountEvent.Created created = event.getCreated();
-                cache.put(accountId, new CachedAccount(accountId, created.getName(), true));
-                LOG.infof("Account created: %s", accountId);
-                // Auto-create default drive for the new account - chained to event lifecycle
-                processingUni = driveService.getOrCreateDefaultDrive(accountId)
-                        .invoke(drive -> LOG.infof("Auto-created default drive for account %s: %s", accountId, drive.driveId))
-                        .onFailure().invoke(error -> LOG.warnf("Failed to auto-create default drive for account %s: %s", accountId, error.getMessage()))
-                        .replaceWithVoid();
-            }
-            case UPDATED -> {
-                AccountEvent.Updated updated = event.getUpdated();
-                CachedAccount existing = cache.get(accountId);
-                boolean active = existing != null ? existing.active() : true;
-                cache.put(accountId, new CachedAccount(accountId, updated.getName(), active));
-                LOG.infof("Account updated: %s", accountId);
-                processingUni = Uni.createFrom().voidItem();
-            }
-            case INACTIVATED -> {
-                CachedAccount existing = cache.get(accountId);
-                if (existing != null) {
-                    cache.put(accountId, new CachedAccount(accountId, existing.name(), false));
-                }
-                LOG.infof("Account inactivated: %s", accountId);
-                processingUni = Uni.createFrom().voidItem();
-            }
-            case REACTIVATED -> {
-                CachedAccount existing = cache.get(accountId);
-                if (existing != null) {
-                    cache.put(accountId, new CachedAccount(accountId, existing.name(), true));
-                }
-                LOG.infof("Account reactivated: %s", accountId);
-                processingUni = Uni.createFrom().voidItem();
-            }
-            default -> {
-                LOG.warnf("Unknown account event operation for %s: %s", accountId, event.getOperationCase());
-                processingUni = Uni.createFrom().voidItem();
-            }
-        }
-
-        return processingUni
-                .onItem().transformToUni(v -> Uni.createFrom().completionStage(message.ack()))
-                .onFailure().invoke(e -> LOG.errorf(e, "Failed to process account event for %s", accountId));
-    }
-
-    /**
      * Check if an account exists and is active.
-     * First checks cache, then falls back to gRPC lookup.
      *
      * @param accountId The account ID to validate
      * @return Uni<Boolean> true if valid and active, false otherwise
@@ -209,22 +55,29 @@ public class AccountCacheService {
             return Uni.createFrom().item(false);
         }
 
-        CachedAccount cached = cache.get(accountId);
-        if (cached != null) {
-            LOG.debugf("Account found in cache: %s (active=%s)", accountId, cached.active());
-            return Uni.createFrom().item(cached.active());
-        }
+        return lookupAccountActive(accountId);
+    }
 
-        // Cache miss - lookup via gRPC
+    /**
+     * Cached account active status lookup. Calls account-service via gRPC and
+     * caches the result. TTL configured via quarkus.cache.caffeine."account-active".
+     */
+    @CacheResult(cacheName = "account-active")
+    Uni<Boolean> lookupAccountActive(String accountId) {
         LOG.debugf("Account cache miss, looking up: %s", accountId);
-        return lookupAccount(accountId)
-                .map(account -> {
-                    if (account != null) {
-                        LOG.debugf("Account found via gRPC: %s (active=%s)", accountId, account.getActive());
-                        cache.put(accountId, CachedAccount.from(account));
-                        return account.getActive();
+
+        return grpcClientFactory.getClient("account-manager", MutinyAccountServiceGrpc::newMutinyStub)
+                .flatMap(client -> client.getAccount(
+                        GetAccountRequest.newBuilder()
+                                .setAccountId(accountId)
+                                .build()))
+                .map(response -> {
+                    if (response.hasAccount()) {
+                        boolean active = response.getAccount().getActive();
+                        LOG.debugf("Account %s lookup result: active=%s", accountId, active);
+                        return active;
                     }
-                    LOG.debugf("Account not found via gRPC: %s", accountId);
+                    LOG.debugf("Account not found: %s", accountId);
                     return false;
                 })
                 .onFailure().recoverWithItem(error -> {
@@ -234,37 +87,47 @@ public class AccountCacheService {
     }
 
     /**
-     * Lookup account via gRPC.
+     * Invalidate a cached account entry so the next lookup fetches fresh data.
      */
-    private Uni<Account> lookupAccount(String accountId) {
-        return grpcClientFactory.getClient("account-manager", MutinyAccountServiceGrpc::newMutinyStub)
-                .flatMap(client -> client.getAccount(
-                        GetAccountRequest.newBuilder()
-                                .setAccountId(accountId)
-                                .build()))
-                .map(response -> response.hasAccount() ? response.getAccount() : null)
-                .onFailure().recoverWithItem((Account) null);
+    @CacheInvalidate(cacheName = "account-active")
+    Uni<Void> invalidateAccount(String accountId) {
+        LOG.debugf("Invalidated cache for account: %s", accountId);
+        return Uni.createFrom().voidItem();
     }
 
     /**
-     * Get the current cache size (for monitoring/testing).
+     * Clear all cached account entries (for testing).
      */
-    public int cacheSize() {
-        return cache.size();
+    @CacheInvalidateAll(cacheName = "account-active")
+    public Uni<Void> resetCache() {
+        LOG.debug("Account cache cleared");
+        return Uni.createFrom().voidItem();
     }
 
     /**
-     * Check if warmup is complete (for monitoring/testing).
+     * Handle account events from Kafka.
+     * Invalidates the cache entry so the next validation gets fresh data.
+     * Also auto-creates default drive on account creation.
      */
-    public boolean isWarmupComplete() {
-        return warmupComplete.get();
-    }
+    @Incoming("account-events-in")
+    public Uni<Void> handleAccountEvent(Message<AccountEvent> message) {
+        AccountEvent event = message.getPayload();
+        String accountId = event.getAccountId();
 
-    /**
-     * Reset the cache (for testing isolation).
-     */
-    public void resetCache() {
-        cache.clear();
-        warmupComplete.set(false);
+        LOG.infof("Account event %s for %s", event.getOperationCase(), accountId);
+
+        // Invalidate cache first, then handle event-specific logic
+        return invalidateAccount(accountId)
+                .chain(() -> {
+                    if (event.getOperationCase() == AccountEvent.OperationCase.CREATED) {
+                        return driveService.getOrCreateDefaultDrive(accountId)
+                                .invoke(drive -> LOG.infof("Auto-created default drive for account %s: %s", accountId, drive.driveId))
+                                .onFailure().invoke(error -> LOG.warnf("Failed to auto-create default drive for account %s: %s", accountId, error.getMessage()))
+                                .replaceWithVoid();
+                    }
+                    return Uni.createFrom().voidItem();
+                })
+                .onItem().transformToUni(v -> Uni.createFrom().completionStage(message.ack()))
+                .onFailure().invoke(e -> LOG.errorf(e, "Failed to process account event for %s", accountId));
     }
 }
