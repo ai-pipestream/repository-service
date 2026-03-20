@@ -19,6 +19,7 @@ import org.jboss.logging.Logger;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
 import software.amazon.awssdk.core.async.AsyncResponseTransformer;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
@@ -41,10 +42,22 @@ import java.util.UUID;
 @ApplicationScoped
 public class DocumentStorageService {
 
+    /**
+     * Result of {@link #deleteLogicalDocument}; feeds gRPC {@code DeletePipeDocResponse} (counts, node ids, outcome).
+     */
+    public record LogicalDeleteResult(int pipedocsRemoved, List<UUID> removedNodeIds, boolean removedDocumentCatalogRowOnly) {
+        public boolean nothingRemoved() {
+            return pipedocsRemoved == 0 && removedNodeIds.isEmpty() && !removedDocumentCatalogRowOnly;
+        }
+    }
+
     private static final Logger LOG = Logger.getLogger(DocumentStorageService.class);
     private static final int MAX_PAGE_SIZE = 1000;
     private static final String DEFAULT_QUERY_CONDITION = "1=1";
     private static final String DEFAULT_ORDER_BY = " order by createdAt desc";
+
+    /** Default retention hint (days) on repository events and pipedoc notifications for OpenSearch ILM. */
+    public static final int DEFAULT_RETENTION_INTENT_DAYS = 30;
 
     @Inject S3AsyncClient s3AsyncClient;
     @Inject S3Config s3Config;
@@ -131,7 +144,7 @@ public class DocumentStorageService {
             final boolean[] isUpdate = {false};
             return Panache.<PipeDocRecord>withTransaction(() ->
                 // 1. Upsert logical Document identity
-                Document.<Document>find("documentId", finalDocId).firstResult()
+                Document.<Document>find("documentId = ?1 and accountId = ?2 and datasourceId = ?3", finalDocId, accountId, finalDatasourceId).firstResult()
                         .flatMap(existingDoc -> {
                             Document doc = existingDoc != null ? existingDoc : new Document();
                             doc.documentId = finalDocId;
@@ -196,7 +209,7 @@ public class DocumentStorageService {
                                     }))
             ).map(persisted -> {
                 eventEmitter.emitCreated(finalDocId, accountId, completeObjectKey, completeObjectKey, sizeBytes, checksum, resolvedBucket, putResponse.versionId(), resolvedRequestId, connectorId, finalDatasourceId);
-                eventEmitter.emitPipeDocUpdate(isUpdate[0] ? "UPDATED" : "CREATED", nodeId.toString(), finalDocId, docToStore.hasSearchMetadata() ? docToStore.getSearchMetadata().getTitle() : null, null, docToStore.getOwnership());
+                eventEmitter.emitPipeDocUpdate(isUpdate[0] ? "UPDATED" : "CREATED", nodeId.toString(), finalDocId, docToStore.hasSearchMetadata() ? docToStore.getSearchMetadata().getTitle() : null, null, docToStore.getOwnership(), DEFAULT_RETENTION_INTENT_DAYS);
                 return new StoredDocument(nodeId.toString(), completeObjectKey, putResponse.versionId(), putResponse.eTag(), sizeBytes, checksum, persisted.createdAt.toEpochMilli());
             });
         });
@@ -213,6 +226,109 @@ public class DocumentStorageService {
                     .emitOn(runnable -> { if (requestContext != null) requestContext.runOnContext(v -> runnable.run()); else vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run()); })
                     .map(response -> { try { return PipeDoc.parseFrom(response.asByteArray()); } catch (Exception e) { return null; } }).onFailure(NoSuchKeyException.class).recoverWithItem((PipeDoc) null);
         });
+    }
+
+    /**
+     * Deletes all {@link PipeDocRecord} rows for the logical document (and the {@link Document} catalog row),
+     * optionally purging storage objects, then emits Kafka delete notifications.
+     */
+    public Uni<LogicalDeleteResult> deleteLogicalDocument(String docId, String accountId, String datasourceId, boolean purgeStorage) {
+        if (docId == null || docId.isBlank() || accountId == null || accountId.isBlank() || datasourceId == null || datasourceId.isBlank()) {
+            return Uni.createFrom().failure(new IllegalArgumentException("doc_id, account_id, and datasource_id are required"));
+        }
+        return accountCacheService.isValidAccount(accountId)
+                .flatMap(ok -> {
+                    if (!ok) {
+                        return Uni.createFrom().failure(new AccountValidationException("Account not found or inactive: " + accountId));
+                    }
+                    return Panache.withTransaction(() ->
+                            PipeDocRecord.<PipeDocRecord>find("docId = ?1 and accountId = ?2 and datasourceId = ?3", docId, accountId, datasourceId).list()
+                                    .flatMap(records -> {
+                                        if (records.isEmpty()) {
+                                            return Document.<Document>find("documentId = ?1 and accountId = ?2 and datasourceId = ?3", docId, accountId, datasourceId).firstResult()
+                                                    .flatMap(doc -> {
+                                                        if (doc == null) {
+                                                            return Uni.createFrom().item(new DeleteTxnResult(List.of(), false));
+                                                        }
+                                                        return doc.delete().replaceWith(new DeleteTxnResult(List.of(), true));
+                                                    });
+                                        }
+                                        List<DeletedPipeDocSnapshot> snapshots = records.stream().map(DeletedPipeDocSnapshot::from).toList();
+                                        Uni<Void> del = Uni.createFrom().voidItem();
+                                        for (PipeDocRecord r : records) {
+                                            del = del.chain(() -> r.delete());
+                                        }
+                                        return del.flatMap(ignored -> Document.<Document>find("documentId = ?1 and accountId = ?2 and datasourceId = ?3", docId, accountId, datasourceId).firstResult()
+                                                .flatMap(doc -> {
+                                                    if (doc == null) {
+                                                        return Uni.createFrom().item(new DeleteTxnResult(snapshots, false));
+                                                    }
+                                                    return doc.delete().replaceWith(new DeleteTxnResult(snapshots, false));
+                                                }));
+                                    })
+                    ).flatMap(txn -> afterLogicalDelete(txn, docId, accountId, datasourceId, purgeStorage));
+                });
+    }
+
+    private record DeleteTxnResult(List<DeletedPipeDocSnapshot> snapshots, boolean removedCatalogOnly) {}
+
+    private Uni<LogicalDeleteResult> afterLogicalDelete(DeleteTxnResult txn, String docId, String accountId, String datasourceId, boolean purgeStorage) {
+        if (txn.snapshots.isEmpty() && !txn.removedCatalogOnly) {
+            return Uni.createFrom().item(new LogicalDeleteResult(0, List.of(), false));
+        }
+        Uni<Void> purge = Uni.createFrom().voidItem();
+        if (purgeStorage) {
+            for (DeletedPipeDocSnapshot s : txn.snapshots) {
+                purge = purge.chain(() -> deleteStorageObjects(s));
+            }
+        }
+        List<UUID> nodeIds = txn.snapshots.stream().map(s -> s.nodeId).toList();
+        int removedCount = txn.snapshots.size();
+        return purge.invoke(() -> {
+                    for (DeletedPipeDocSnapshot s : txn.snapshots) {
+                        OwnershipContext own = OwnershipContext.newBuilder()
+                                .setAccountId(s.accountId)
+                                .setDatasourceId(s.datasourceId)
+                                .setConnectorId(s.connectorId != null ? s.connectorId : "")
+                                .build();
+                        eventEmitter.emitPipeDocUpdate("DELETED", s.nodeId.toString(), docId, null, null, own, DEFAULT_RETENTION_INTENT_DAYS);
+                    }
+                    String connectorId = txn.snapshots.isEmpty() ? null : txn.snapshots.get(0).connectorId;
+                    eventEmitter.emitDeleted(docId, accountId, "deleteLogicalDocument", purgeStorage, UUID.randomUUID().toString(), connectorId, datasourceId);
+                })
+                .replaceWith(new LogicalDeleteResult(removedCount, nodeIds, txn.removedCatalogOnly));
+    }
+
+    private Uni<Void> deleteStorageObjects(DeletedPipeDocSnapshot s) {
+        return driveService.resolveDrive(s.driveName, s.accountId)
+                .flatMap(resolved -> {
+                    String bucket = resolved.bucket();
+                    Uni<Void> u = deleteIfPresent(bucket, s.pipedocObjectKey);
+                    if (s.objectKey != null && !s.objectKey.isBlank() && !s.objectKey.equals(s.pipedocObjectKey)) {
+                        u = u.chain(() -> deleteIfPresent(bucket, s.objectKey));
+                    }
+                    return u;
+                })
+                .onFailure().invoke(e -> LOG.warnf(e, "Storage delete failed for node_id=%s", s.nodeId));
+    }
+
+    private Uni<Void> deleteIfPresent(String bucket, String key) {
+        if (key == null || key.isBlank()) {
+            return Uni.createFrom().voidItem();
+        }
+        return Uni.createFrom().completionStage(s3AsyncClient.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(key).build()))
+                .replaceWithVoid()
+                .onFailure().recoverWithUni(e -> {
+                    LOG.warnf(e, "deleteObject failed bucket=%s key=%s", bucket, key);
+                    return Uni.createFrom().voidItem();
+                });
+    }
+
+    private record DeletedPipeDocSnapshot(UUID nodeId, String pipedocObjectKey, String objectKey, String driveName,
+                                          String accountId, String datasourceId, String connectorId) {
+        static DeletedPipeDocSnapshot from(PipeDocRecord r) {
+            return new DeletedPipeDocSnapshot(r.nodeId, r.pipedocObjectKey, r.objectKey, r.driveName, r.accountId, r.datasourceId, r.connectorId);
+        }
     }
 
     public Uni<PipeDoc> getByCompositeKey(String docId, String graphAddressId, String accountId) {

@@ -2,8 +2,24 @@ package ai.pipestream.repository.grpc;
 
 import ai.pipestream.data.v1.DocumentReference;
 import ai.pipestream.repository.entity.PipeDocRecord;
-import ai.pipestream.repository.pipedoc.v1.*;
+import ai.pipestream.repository.pipedoc.v1.DeletePipeDocOutcome;
+import ai.pipestream.repository.pipedoc.v1.DeletePipeDocRequest;
+import ai.pipestream.repository.pipedoc.v1.DeletePipeDocResponse;
+import ai.pipestream.repository.pipedoc.v1.GetBlobRequest;
+import ai.pipestream.repository.pipedoc.v1.GetBlobResponse;
+import ai.pipestream.repository.pipedoc.v1.GetPipeDocByReferenceRequest;
+import ai.pipestream.repository.pipedoc.v1.GetPipeDocByReferenceResponse;
+import ai.pipestream.repository.pipedoc.v1.GetPipeDocRequest;
+import ai.pipestream.repository.pipedoc.v1.GetPipeDocResponse;
+import ai.pipestream.repository.pipedoc.v1.ListPipeDocsRequest;
+import ai.pipestream.repository.pipedoc.v1.ListPipeDocsResponse;
+import ai.pipestream.repository.pipedoc.v1.PipeDocMetadata;
+import ai.pipestream.repository.pipedoc.v1.MutinyPipeDocServiceGrpc;
+import ai.pipestream.repository.pipedoc.v1.RemovedPipeDocNode;
+import ai.pipestream.repository.pipedoc.v1.SavePipeDocRequest;
+import ai.pipestream.repository.pipedoc.v1.SavePipeDocResponse;
 import ai.pipestream.repository.service.DocumentStorageService;
+import ai.pipestream.repository.service.DocumentStorageService.LogicalDeleteResult;
 import io.quarkus.grpc.GrpcService;
 import io.quarkus.hibernate.reactive.panache.common.WithSession;
 import io.smallrye.mutiny.Uni;
@@ -17,6 +33,10 @@ import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import ai.pipestream.data.v1.PipeDoc;
 import ai.pipestream.repository.s3.S3Config;
 import ai.pipestream.repository.service.DriveService;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
+
+import java.util.UUID;
 
 /**
  * gRPC service implementation for Repository Service.
@@ -101,34 +121,33 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
             return Uni.createFrom().failure(new IllegalArgumentException("Node ID is required"));
         }
 
-        String docId = request.getNodeId();
-        
-        // Use DocumentStorageService to retrieve the document
-        return storageService.get(docId)
+        String nodeIdStr = request.getNodeId();
+        UUID nodeUuid;
+        try {
+            nodeUuid = UUID.fromString(nodeIdStr);
+        } catch (IllegalArgumentException e) {
+            return Uni.createFrom().failure(new IllegalArgumentException("node_id must be a UUID: " + nodeIdStr));
+        }
+
+        return storageService.get(nodeIdStr)
                 .flatMap(doc -> {
                     if (doc == null) {
-                        return Uni.createFrom().failure(new RuntimeException("Document not found: " + docId));
+                        return Uni.createFrom().failure(new RuntimeException("Document not found for node_id: " + nodeIdStr));
                     }
-                    
-                    // Fetch metadata for additional response fields
-                    return PipeDocRecord.<PipeDocRecord>find("docId", docId).firstResult()
+                    return PipeDocRecord.<PipeDocRecord>findById(nodeUuid)
                             .map(record -> {
                                 if (record == null) {
-                                    // Fallback if record not found (shouldn't happen)
-                                    // Fallback if record not found (shouldn't happen)
-                                    // This case should have been handled above, but keeping for safety
                                     return GetPipeDocResponse.newBuilder()
                                             .setPipedoc(doc)
-                                            .setNodeId(request.getNodeId()) // Use the requested node_id as-is
+                                            .setNodeId(nodeIdStr)
                                             .setDrive("default")
                                             .setSizeBytes(0)
                                             .setRetrievedAtEpochMs(System.currentTimeMillis())
                                             .build();
                                 }
-                                
                                 return GetPipeDocResponse.newBuilder()
                                         .setPipedoc(doc)
-                                        .setNodeId(record.nodeId.toString()) // Use UUID node_id
+                                        .setNodeId(record.nodeId.toString())
                                         .setDrive(record.driveName)
                                         .setSizeBytes(record.sizeBytes != null ? record.sizeBytes : 0)
                                         .setRetrievedAtEpochMs(System.currentTimeMillis())
@@ -146,18 +165,18 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
         }
 
         DocumentReference ref = request.getDocumentRef();
-        LOG.debugf("getPipeDocByReference request: doc_id=%s, source_node_id=%s, account_id=%s",
-                ref.getDocId(), ref.getSourceNodeId(), ref.getAccountId());
+        LOG.debugf("getPipeDocByReference request: doc_id=%s, graph_address_id=%s, account_id=%s",
+                ref.getDocId(), ref.getGraphAddressId(), ref.getAccountId());
 
         String docId = ref.getDocId();
-        String graphAddressId = ref.getSourceNodeId(); // proto field still named source_node_id, represents graph_address_id
+        String graphAddressId = ref.getGraphAddressId();
         String accountId = ref.getAccountId();
 
         if (docId == null || docId.isEmpty()) {
             return Uni.createFrom().failure(new IllegalArgumentException("DocumentReference.doc_id is required"));
         }
         if (graphAddressId == null || graphAddressId.isEmpty()) {
-            return Uni.createFrom().failure(new IllegalArgumentException("DocumentReference.source_node_id (graph_address_id) is required"));
+            return Uni.createFrom().failure(new IllegalArgumentException("DocumentReference.graph_address_id is required"));
         }
         if (accountId == null || accountId.isEmpty()) {
             return Uni.createFrom().failure(new IllegalArgumentException("DocumentReference.account_id is required"));
@@ -191,6 +210,59 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
                 })
                 .onFailure().invoke(throwable -> LOG.errorf(throwable,
                         "Failed to get PipeDoc by reference: doc_id=%s, account_id=%s", docId, accountId));
+    }
+
+    @Override
+    @WithSession
+    public Uni<DeletePipeDocResponse> deletePipeDoc(DeletePipeDocRequest request) {
+        if (request.getCommandCase() != DeletePipeDocRequest.CommandCase.LOGICAL_DOCUMENT) {
+            return Uni.createFrom().failure(new StatusRuntimeException(
+                    Status.INVALID_ARGUMENT.withDescription("logical_document command is required")));
+        }
+        var cmd = request.getLogicalDocument();
+        if (cmd.getDocId() == null || cmd.getDocId().isBlank()
+                || cmd.getAccountId() == null || cmd.getAccountId().isBlank()
+                || cmd.getDatasourceId() == null || cmd.getDatasourceId().isBlank()) {
+            return Uni.createFrom().failure(new StatusRuntimeException(
+                    Status.INVALID_ARGUMENT.withDescription("doc_id, account_id, and datasource_id are required")));
+        }
+        return storageService.deleteLogicalDocument(
+                        cmd.getDocId(),
+                        cmd.getAccountId(),
+                        cmd.getDatasourceId(),
+                        request.getPurgeStorage())
+                .map(result -> toDeletePipeDocResponse(request, result))
+                .onFailure().recoverWithUni(throwable -> {
+                    if (throwable instanceof IllegalArgumentException e) {
+                        return Uni.createFrom().failure(new StatusRuntimeException(
+                                Status.INVALID_ARGUMENT.withDescription(e.getMessage())));
+                    }
+                    if (throwable instanceof DocumentStorageService.AccountValidationException e) {
+                        return Uni.createFrom().failure(new StatusRuntimeException(
+                                Status.NOT_FOUND.withDescription(e.getMessage())));
+                    }
+                    return Uni.createFrom().failure(new StatusRuntimeException(
+                            Status.INTERNAL.withDescription(throwable.getMessage() != null ? throwable.getMessage() : "delete failed")));
+                });
+    }
+
+    private static DeletePipeDocResponse toDeletePipeDocResponse(DeletePipeDocRequest request, LogicalDeleteResult result) {
+        DeletePipeDocResponse.Builder b = DeletePipeDocResponse.newBuilder();
+        if (result.nothingRemoved()) {
+            b.setOutcome(DeletePipeDocOutcome.DELETE_PIPE_DOC_OUTCOME_NOTHING_TO_REMOVE)
+                    .setPipedocsRemoved(0)
+                    .setMessage("no matching pipedoc or document rows");
+        } else {
+            b.setOutcome(DeletePipeDocOutcome.DELETE_PIPE_DOC_OUTCOME_REMOVED)
+                    .setPipedocsRemoved(result.pipedocsRemoved())
+                    .setMessage(result.pipedocsRemoved() > 0 ? "pipedocs removed" : "document catalog row removed");
+        }
+        if (!request.getOmitRemovedNodes()) {
+            for (UUID id : result.removedNodeIds()) {
+                b.addRemovedNodes(RemovedPipeDocNode.newBuilder().setNodeId(id.toString()));
+            }
+        }
+        return b.build();
     }
 
     @Override
