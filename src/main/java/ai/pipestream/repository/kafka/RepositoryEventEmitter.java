@@ -111,21 +111,22 @@ public class RepositoryEventEmitter {
         emitter.send(event);
     }
 
-    public void emitDeleted(String docId, String accountId, String reason, boolean purged, String requestId, String connectorId) {
+    public void emitDeleted(String docId, String accountId, String reason, boolean purged, String requestId, String connectorId, String datasourceId) {
         Instant now = Instant.now();
         String eventId = computeEventId(docId, "delete", now);
         RepositoryEvent.Deleted.Builder deleted = RepositoryEvent.Deleted.newBuilder().setPurged(purged);
         if (reason != null && !reason.isEmpty()) deleted.setReason(reason);
         SourceContext.Builder source = SourceContext.newBuilder().setComponent(COMPONENT).setOperation("delete").setRequestId(requestId != null ? requestId : UUID.randomUUID().toString());
         if (connectorId != null && !connectorId.isEmpty()) source.setConnectorId(connectorId);
-        RepositoryEvent event = RepositoryEvent.newBuilder().setEventId(eventId).setTimestamp(toProtoTimestamp(now)).setDocumentId(docId).setAccountId(accountId).setSource(source.build()).setDeleted(deleted.build()).build();
-        emitter.send(event);
+        RepositoryEvent.Builder eventBuilder = RepositoryEvent.newBuilder().setEventId(eventId).setTimestamp(toProtoTimestamp(now)).setDocumentId(docId).setAccountId(accountId).setSource(source.build()).setDeleted(deleted.build());
+        if (datasourceId != null && !datasourceId.isEmpty()) eventBuilder.setDatasourceId(datasourceId);
+        emitter.send(eventBuilder.build());
     }
 
     /**
      * Emit a PipeDocUpdateNotification with full ownership context.
      */
-    public void emitPipeDocUpdate(String updateType, String storageId, String docId, String title, String author, OwnershipContext ownership) {
+    public void emitPipeDocUpdate(String updateType, String storageId, String docId, String title, String author, OwnershipContext ownership, int retentionIntentDays) {
         Instant now = Instant.now();
         PipeDocUpdateNotification.Builder builder = PipeDocUpdateNotification.newBuilder()
                 .setUpdateType(updateType)
@@ -133,7 +134,8 @@ public class RepositoryEventEmitter {
                 .setDocId(docId != null ? docId : "")
                 .setTimestamp(now.toEpochMilli())
                 .setCreatedAt(toProtoTimestamp(now))
-                .setUpdatedAt(toProtoTimestamp(now));
+                .setUpdatedAt(toProtoTimestamp(now))
+                .setRetentionIntentDays(retentionIntentDays);
 
         if (title != null && !title.isBlank()) builder.setTitle(title);
         if (author != null && !author.isBlank()) builder.setAuthor(author);

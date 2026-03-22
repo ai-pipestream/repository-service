@@ -37,8 +37,8 @@ public class MockRepositoryEventEmitter extends RepositoryEventEmitter {
 
     @Override
     public void emitDeleted(String docId, String accountId, String reason, boolean purged,
-                            String requestId, String connectorId) {
-        LOG.infof("Mock emitDeleted: docId=%s, purged=%s", docId, purged);
+                            String requestId, String connectorId, String datasourceId) {
+        LOG.infof("Mock emitDeleted: docId=%s, purged=%s, datasourceId=%s", docId, purged, datasourceId);
         emittedEvents.add(new EmittedEvent("DELETED", docId, accountId, null));
     }
 
