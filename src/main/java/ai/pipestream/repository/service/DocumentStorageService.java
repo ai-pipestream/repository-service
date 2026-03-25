@@ -133,6 +133,11 @@ public class DocumentStorageService {
 
         List<String> acls = new ArrayList<>(docToStore.getOwnership().getAclsList());
 
+        // Emit storage intent BEFORE upload — marks orphan candidates if upload/persist fails
+        eventEmitter.emitStorageIntent(finalDocId, accountId, completeObjectKey,
+                driveName, resolvedRequestId, connectorId, finalDatasourceId,
+                docToStore.hasOwnership() ? docToStore.getOwnership() : null);
+
         return Uni.createFrom().completionStage(
                 s3AsyncClient.putObject(PutObjectRequest.builder().bucket(resolvedBucket).key(completeObjectKey).contentType(contentType).contentLength(sizeBytes).build(), AsyncRequestBody.fromBytes(pipeDocBytes))
         )
@@ -208,7 +213,16 @@ public class DocumentStorageService {
                                         return record.persist();
                                     }))
             ).map(persisted -> {
-                eventEmitter.emitCreated(finalDocId, accountId, completeObjectKey, completeObjectKey, sizeBytes, checksum, resolvedBucket, putResponse.versionId(), resolvedRequestId, connectorId, finalDatasourceId);
+                // Full Created event with catalog metadata — confirms upload + persist succeeded
+                String docName = docToStore.hasSearchMetadata() && docToStore.getSearchMetadata().hasTitle()
+                        ? docToStore.getSearchMetadata().getTitle() : finalDocId;
+                String sourceMimeType = docToStore.hasSearchMetadata() && !docToStore.getSearchMetadata().getSourceMimeType().isEmpty()
+                        ? docToStore.getSearchMetadata().getSourceMimeType() : contentType;
+                eventEmitter.emitCreated(finalDocId, accountId, completeObjectKey, sizeBytes, checksum,
+                        resolvedBucket, putResponse.versionId(), putResponse.eTag(),
+                        resolvedRequestId, connectorId, finalDatasourceId,
+                        docToStore.hasOwnership() ? docToStore.getOwnership() : null,
+                        docName, completeObjectKey, sourceMimeType);
                 eventEmitter.emitPipeDocUpdate(isUpdate[0] ? "UPDATED" : "CREATED", nodeId.toString(), finalDocId, docToStore.hasSearchMetadata() ? docToStore.getSearchMetadata().getTitle() : null, null, docToStore.getOwnership(), DEFAULT_RETENTION_INTENT_DAYS);
                 return new StoredDocument(nodeId.toString(), completeObjectKey, putResponse.versionId(), putResponse.eTag(), sizeBytes, checksum, persisted.createdAt.toEpochMilli());
             });

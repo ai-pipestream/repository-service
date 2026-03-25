@@ -48,20 +48,96 @@ public class RepositoryEventEmitter {
 
     private static final String INTAKE_SOURCE_NODE_ID = "connector-intake";
 
-    public void emitCreated(String docId, String accountId, String s3Key, String pipedocS3Key, long sizeBytes, String contentHash, String bucket, String versionId, String requestId, String connectorId) {
-        emitCreated(docId, accountId, s3Key, pipedocS3Key, sizeBytes, contentHash, bucket, versionId, requestId, connectorId, null);
+    public void emitCreated(String docId, String accountId, String storageKey, String pipedocStorageKey, long sizeBytes, String contentHash, String driveName, String versionId, String requestId, String connectorId) {
+        emitCreated(docId, accountId, storageKey, pipedocStorageKey, sizeBytes, contentHash, driveName, versionId, requestId, connectorId, null, null);
     }
 
-    public void emitCreated(String docId, String accountId, String s3Key, String pipedocS3Key, long sizeBytes, String contentHash, String bucket, String versionId, String requestId, String connectorId, String datasourceId) {
+    /**
+     * Emits a storage intent event BEFORE the S3 upload begins.
+     * If the upload or DB persist fails, this event marks an orphan candidate.
+     * Uses the same Kafka key as the subsequent Created event so ordering is preserved.
+     */
+    public void emitStorageIntent(String docId, String accountId, String storageKey,
+                                   String driveName, String requestId, String connectorId,
+                                   String datasourceId, OwnershipContext ownership) {
+        Instant now = Instant.now();
+        String eventId = computeEventId(docId, "intent", now);
+        RepositoryEvent.Created.Builder created = RepositoryEvent.Created.newBuilder()
+                .setStorageKey(storageKey)
+                .setDriveName(driveName != null ? driveName : "");
+
+        SourceContext.Builder source = SourceContext.newBuilder()
+                .setComponent(COMPONENT)
+                .setOperation("intent")
+                .setRequestId(requestId != null ? requestId : UUID.randomUUID().toString());
+        if (connectorId != null && !connectorId.isEmpty()) source.setConnectorId(connectorId);
+
+        RepositoryEvent.Builder eventBuilder = RepositoryEvent.newBuilder()
+                .setEventId(eventId)
+                .setTimestamp(toProtoTimestamp(now))
+                .setDocumentId(docId)
+                .setAccountId(accountId)
+                .setSource(source.build())
+                .setCreated(created.build());
+        if (datasourceId != null && !datasourceId.isEmpty()) eventBuilder.setDatasourceId(datasourceId);
+        if (ownership != null) eventBuilder.setOwnership(ownership);
+
+        emitter.send(eventBuilder.build());
+    }
+
+    /** Backward-compatible overload without catalog metadata fields. */
+    public void emitCreated(String docId, String accountId, String storageKey, String pipedocStorageKey,
+                             long sizeBytes, String contentHash, String driveName, String versionId,
+                             String requestId, String connectorId, String datasourceId) {
+        emitCreated(docId, accountId, storageKey, sizeBytes, contentHash, driveName, versionId, null,
+                requestId, connectorId, datasourceId, null, null, null, null);
+    }
+
+    /** Backward-compatible overload without catalog metadata fields. */
+    public void emitCreated(String docId, String accountId, String storageKey, String pipedocStorageKey,
+                             long sizeBytes, String contentHash, String driveName, String versionId,
+                             String requestId, String connectorId, String datasourceId, OwnershipContext ownership) {
+        emitCreated(docId, accountId, storageKey, sizeBytes, contentHash, driveName, versionId, null,
+                requestId, connectorId, datasourceId, ownership, null, null, null);
+    }
+
+    /**
+     * Emits the full Created event AFTER S3 upload + DB persist succeed.
+     * Carries all catalog metadata so the opensearch-manager can index a complete entry.
+     */
+    public void emitCreated(String docId, String accountId, String storageKey, long sizeBytes,
+                             String contentHash, String driveName, String versionId, String storageEtag,
+                             String requestId, String connectorId, String datasourceId,
+                             OwnershipContext ownership, String name, String path, String contentType) {
         Instant now = Instant.now();
         String eventId = computeEventId(docId, "create", now);
-        RepositoryEvent.Created.Builder created = RepositoryEvent.Created.newBuilder().setS3Key(s3Key).setSize(sizeBytes).setBucketName(bucket);
+        RepositoryEvent.Created.Builder created = RepositoryEvent.Created.newBuilder()
+                .setStorageKey(storageKey)
+                .setSize(sizeBytes)
+                .setDriveName(driveName != null ? driveName : "");
         if (contentHash != null && !contentHash.isEmpty()) created.setContentHash(contentHash);
-        if (versionId != null && !versionId.isEmpty()) created.setS3VersionId(versionId);
-        SourceContext.Builder source = SourceContext.newBuilder().setComponent(COMPONENT).setOperation("create").setRequestId(requestId != null ? requestId : UUID.randomUUID().toString());
+        if (versionId != null && !versionId.isEmpty()) created.setStorageVersionId(versionId);
+        if (name != null && !name.isEmpty()) created.setName(name);
+        if (path != null && !path.isEmpty()) created.setPath(path);
+        if (contentType != null && !contentType.isEmpty()) created.setContentType(contentType);
+
+        SourceContext.Builder source = SourceContext.newBuilder()
+                .setComponent(COMPONENT)
+                .setOperation("create")
+                .setRequestId(requestId != null ? requestId : UUID.randomUUID().toString());
         if (connectorId != null && !connectorId.isEmpty()) source.setConnectorId(connectorId);
-        RepositoryEvent event = RepositoryEvent.newBuilder().setEventId(eventId).setTimestamp(toProtoTimestamp(now)).setDocumentId(docId).setAccountId(accountId).setSource(source.build()).setCreated(created.build()).build();
-        emitter.send(event);
+
+        RepositoryEvent.Builder eventBuilder = RepositoryEvent.newBuilder()
+                .setEventId(eventId)
+                .setTimestamp(toProtoTimestamp(now))
+                .setDocumentId(docId)
+                .setAccountId(accountId)
+                .setSource(source.build())
+                .setCreated(created.build());
+        if (datasourceId != null && !datasourceId.isEmpty()) eventBuilder.setDatasourceId(datasourceId);
+        if (ownership != null) eventBuilder.setOwnership(ownership);
+
+        emitter.send(eventBuilder.build());
         if (connectorId != null && !connectorId.isBlank() && datasourceId != null && !datasourceId.isBlank()) {
             emitIntakeRepoCreated(eventId, now, docId, accountId, connectorId, datasourceId, versionId);
         }
@@ -98,16 +174,31 @@ public class RepositoryEventEmitter {
         intakeEventEmitter.send(intakeEvent);
     }
 
-    public void emitUpdated(String docId, String accountId, String s3Key, long sizeBytes, String contentHash, String bucket, String newVersionId, String previousVersionId, String requestId, String connectorId) {
+    public void emitUpdated(String docId, String accountId, String storageKey, long sizeBytes, String contentHash, String driveName, String newVersionId, String previousVersionId, String requestId, String connectorId) {
         Instant now = Instant.now();
         String eventId = computeEventId(docId, "update", now);
-        RepositoryEvent.Updated.Builder updated = RepositoryEvent.Updated.newBuilder().setS3Key(s3Key).setSize(sizeBytes).setBucketName(bucket);
+        RepositoryEvent.Updated.Builder updated = RepositoryEvent.Updated.newBuilder()
+                .setStorageKey(storageKey)
+                .setSize(sizeBytes)
+                .setDriveName(driveName != null ? driveName : "");
         if (contentHash != null && !contentHash.isEmpty()) updated.setContentHash(contentHash);
-        if (newVersionId != null && !newVersionId.isEmpty()) updated.setS3VersionId(newVersionId);
+        if (newVersionId != null && !newVersionId.isEmpty()) updated.setStorageVersionId(newVersionId);
         if (previousVersionId != null && !previousVersionId.isEmpty()) updated.setPreviousVersionId(previousVersionId);
-        SourceContext.Builder source = SourceContext.newBuilder().setComponent(COMPONENT).setOperation("update").setRequestId(requestId != null ? requestId : UUID.randomUUID().toString());
+
+        SourceContext.Builder source = SourceContext.newBuilder()
+                .setComponent(COMPONENT)
+                .setOperation("update")
+                .setRequestId(requestId != null ? requestId : UUID.randomUUID().toString());
         if (connectorId != null && !connectorId.isEmpty()) source.setConnectorId(connectorId);
-        RepositoryEvent event = RepositoryEvent.newBuilder().setEventId(eventId).setTimestamp(toProtoTimestamp(now)).setDocumentId(docId).setAccountId(accountId).setSource(source.build()).setUpdated(updated.build()).build();
+
+        RepositoryEvent event = RepositoryEvent.newBuilder()
+                .setEventId(eventId)
+                .setTimestamp(toProtoTimestamp(now))
+                .setDocumentId(docId)
+                .setAccountId(accountId)
+                .setSource(source.build())
+                .setUpdated(updated.build())
+                .build();
         emitter.send(event);
     }
 
