@@ -147,8 +147,23 @@ public class RawUploadResource {
                     String blobObjectKey = basePath + "/" + blobId.toString() + ".bin";  // Use UUID for blob filename
                     String pipedocObjectKey = basePath + "/" + nodeId.toString() + ".pb";
                     
-                    LOG.infof("Uploading doc_id=%s, blob_id=%s to s3://%s/%s (bytes=%d), PipeDoc will be at %s", 
+                    LOG.infof("Uploading doc_id=%s, blob_id=%s to s3://%s/%s (bytes=%d), PipeDoc will be at %s",
                             resolvedDocId, blobId, s3Config.bucket(), blobObjectKey, contentLength, pipedocObjectKey);
+
+                    // Build ownership context for event emission
+                    OwnershipContext.Builder ownershipBuilder = OwnershipContext.newBuilder()
+                            .setAccountId(accountId)
+                            .setDatasourceId(datasourceId);
+                    if (resolvedConnectorId != null && !resolvedConnectorId.isEmpty()) {
+                        ownershipBuilder.setConnectorId(resolvedConnectorId);
+                    }
+                    OwnershipContext ownership = ownershipBuilder.build();
+
+                    // Emit storage intent BEFORE the S3 upload begins
+                    eventEmitter.emitStorageIntent(
+                            resolvedDocId, accountId, blobObjectKey,
+                            s3Config.bucket(), resolvedRequestId,
+                            resolvedConnectorId, datasourceId, ownership);
 
                     // 2. Upload Raw File to S3 (Streamed Async)
                     // We use the Worker Pool executor to read from the blocking InputStream
@@ -255,14 +270,18 @@ public class RawUploadResource {
                                 resolvedDocId,
                                 accountId,
                                 blobObjectKey,
-                                pipedocObjectKey,
-                                    contentLength,
-                                    resolvedChecksum,
-                                    s3Config.bucket(),
-                                    versionId,
-                                    resolvedRequestId,
+                                contentLength,
+                                resolvedChecksum,
+                                s3Config.bucket(),
+                                versionId,
+                                etag,
+                                resolvedRequestId,
                                 resolvedConnectorId,
-                                datasourceId
+                                datasourceId,
+                                ownership,
+                                resolvedFilename,
+                                blobObjectKey,
+                                resolvedContentType
                             );
 
                             // Emit raw upload event for tracking binary data arrival

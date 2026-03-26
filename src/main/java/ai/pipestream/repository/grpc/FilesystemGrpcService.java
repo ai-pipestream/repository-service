@@ -619,14 +619,18 @@ public class FilesystemGrpcService extends MutinyFilesystemServiceGrpc.Filesyste
                                 record.docId,
                                 record.accountId,
                                 record.objectKey,
-                                record.pipedocObjectKey,
                                 record.sizeBytes != null ? record.sizeBytes : 0L,
                                 record.checksum,
                                 bucket,
                                 record.versionId,
+                                null,  // storageEtag — not tracked on reindex
                                 record.nodeId.toString(),
                                 record.connectorId,
-                                record.datasourceId
+                                record.datasourceId,
+                                null,  // ownership — not available on reindex path
+                                record.filename,
+                                record.objectKey,
+                                record.contentType
                         );
                         reindexed.incrementAndGet();
                     } catch (Exception e) {
