@@ -84,6 +84,7 @@ public class RawUploadResource {
             @HeaderParam("Content-Length") Long contentLength,
             @HeaderParam("x-account-id") String accountId,
             @HeaderParam("x-connector-id") String connectorId,
+            @HeaderParam("x-datasource-id") String externalDatasourceId,
             @HeaderParam("x-doc-id") String docId,
             @HeaderParam("x-drive-name") String driveName,
             @HeaderParam("x-filename") String filename,
@@ -124,7 +125,9 @@ public class RawUploadResource {
                             ? UUID.randomUUID().toString()
                             : requestId;
                     String resolvedConnectorId = (connectorId == null || connectorId.isBlank()) ? null : connectorId;
-                    String datasourceId = computeDatasourceId(accountId, resolvedConnectorId);
+                    String datasourceId = (externalDatasourceId != null && !externalDatasourceId.isBlank())
+                            ? externalDatasourceId
+                            : computeDatasourceId(accountId, resolvedConnectorId);
                     String resolvedDocId = (docId == null || docId.isBlank()) ? UUID.randomUUID().toString() : docId;
                     String resolvedDriveName = (driveName == null || driveName.isBlank()) ? "default" : driveName;
                     String resolvedFilename = (filename == null || filename.isBlank()) ? (resolvedDocId + ".bin") : filename;
