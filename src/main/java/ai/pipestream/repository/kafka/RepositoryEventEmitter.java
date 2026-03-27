@@ -46,7 +46,8 @@ public class RepositoryEventEmitter {
     @ProtobufChannel("document-uploaded-events-out")
     ProtobufEmitter<DocumentUploadedEvent> documentUploadedEmitter;
 
-    private static final String INTAKE_SOURCE_NODE_ID = "connector-intake";
+    // source_node_id on IntakeRepoEvent is set to datasourceId (the graph entry point),
+    // not a service name. The intake consumer uses datasourceId for engine handoff.
 
     public void emitCreated(String docId, String accountId, String storageKey, String pipedocStorageKey, long sizeBytes, String contentHash, String driveName, String versionId, String requestId, String connectorId) {
         emitCreated(docId, accountId, storageKey, pipedocStorageKey, sizeBytes, contentHash, driveName, versionId, requestId, connectorId, null, null);
@@ -170,7 +171,7 @@ public class RepositoryEventEmitter {
     }
 
     private void emitIntakeRepoCreated(String eventId, Instant now, String docId, String accountId, String connectorId, String datasourceId, String versionId) {
-        IntakeRepoEvent intakeEvent = IntakeRepoEvent.newBuilder().setEventId(eventId + "-intake").setEventType(IntakeRepoEventType.INTAKE_REPO_EVENT_TYPE_CREATED).setEventTime(toProtoTimestamp(now)).setDocId(docId).setAccountId(accountId).setConnectorId(connectorId).setDatasourceId(datasourceId).setSourceNodeId(INTAKE_SOURCE_NODE_ID).setS3VersionId(versionId == null ? "" : versionId).build();
+        IntakeRepoEvent intakeEvent = IntakeRepoEvent.newBuilder().setEventId(eventId + "-intake").setEventType(IntakeRepoEventType.INTAKE_REPO_EVENT_TYPE_CREATED).setEventTime(toProtoTimestamp(now)).setDocId(docId).setAccountId(accountId).setConnectorId(connectorId).setDatasourceId(datasourceId).setSourceNodeId(datasourceId).setS3VersionId(versionId == null ? "" : versionId).build();
         intakeEventEmitter.send(intakeEvent);
     }
 
