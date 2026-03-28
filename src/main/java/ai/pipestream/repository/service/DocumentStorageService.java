@@ -66,6 +66,8 @@ public class DocumentStorageService {
     @Inject io.vertx.mutiny.core.Vertx vertx;
     @Inject PipeDocUuidGenerator uuidGenerator;
     @Inject DriveService driveService;
+    @Inject RedisStorageConfig redisStorageConfig;
+    @Inject RedisDocumentCache redisCache;
 
     public DocumentStorageService() {
         LOG.info("DocumentStorageService initialized (Reactive)");
@@ -138,14 +140,37 @@ public class DocumentStorageService {
                 driveName, resolvedRequestId, connectorId, finalDatasourceId,
                 docToStore.hasOwnership() ? docToStore.getOwnership() : null);
 
-        return Uni.createFrom().completionStage(
-                s3AsyncClient.putObject(PutObjectRequest.builder().bucket(resolvedBucket).key(completeObjectKey).contentType(contentType).contentLength(sizeBytes).build(), AsyncRequestBody.fromBytes(pipeDocBytes))
-        )
+        // Branch on storage mode: S3-only (synchronous) vs Redis-buffered (async S3 flush)
+        boolean useRedis = redisStorageConfig.resolvedStorageMode() == StorageMode.REDIS_BUFFERED;
+
+        Uni<?> storageWrite;
+        if (useRedis) {
+            // Redis path: sub-ms write, S3 happens later via Kafka consumer
+            storageWrite = redisCache.put(nodeId.toString(), pipeDocBytes);
+        } else {
+            // S3 path: synchronous write, wait for ACK
+            storageWrite = Uni.createFrom().completionStage(
+                    s3AsyncClient.putObject(PutObjectRequest.builder().bucket(resolvedBucket).key(completeObjectKey).contentType(contentType).contentLength(sizeBytes).build(), AsyncRequestBody.fromBytes(pipeDocBytes))
+            );
+        }
+
+        return storageWrite
         .emitOn(runnable -> {
             if (requestContext != null) requestContext.runOnContext(v -> runnable.run());
             else vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
         })
-        .flatMap(putResponse -> {
+        .flatMap(writeResult -> {
+            // Extract S3 metadata (only available in S3-only mode)
+            String s3VersionId = null;
+            String s3Etag = null;
+            if (!useRedis && writeResult instanceof software.amazon.awssdk.services.s3.model.PutObjectResponse putResponse) {
+                s3VersionId = putResponse.versionId();
+                s3Etag = putResponse.eTag();
+            }
+            final String finalVersionId = s3VersionId;
+            final String finalEtag = s3Etag;
+            final String pipeDocStatus = useRedis ? BackgroundS3Flusher.STATUS_PENDING_STORAGE : BackgroundS3Flusher.STATUS_AVAILABLE;
+
             final boolean[] isUpdate = {false};
             return Panache.<PipeDocRecord>withTransaction(() ->
                 // 1. Upsert logical Document identity
@@ -159,17 +184,19 @@ public class DocumentStorageService {
                             doc.contentType = contentType;
                             doc.contentSize = sizeBytes;
                             doc.checksum = checksum;
-                            doc.storageLocation = "s3://" + resolvedBucket + "/" + completeObjectKey;
+                            doc.storageLocation = useRedis
+                                    ? "redis://pipedoc:" + nodeId  // temporary — S3 path set after flush
+                                    : "s3://" + resolvedBucket + "/" + completeObjectKey;
                             doc.updatedAt = Instant.now();
                             doc.title = docToStore.hasSearchMetadata() && docToStore.getSearchMetadata().hasTitle() ? docToStore.getSearchMetadata().getTitle() : finalDocId;
-                            
+
                             String filename = null;
                             if (docToStore.hasBlobBag()) {
                                 if (docToStore.getBlobBag().hasBlob()) filename = docToStore.getBlobBag().getBlob().getFilename();
                                 else if (docToStore.getBlobBag().hasBlobs() && docToStore.getBlobBag().getBlobs().getBlobCount() > 0) filename = docToStore.getBlobBag().getBlobs().getBlob(0).getFilename();
                             }
                             doc.filename = (filename != null && !filename.isBlank()) ? filename : doc.title;
-                            
+
                             if (existingDoc == null) {
                                 doc.createdAt = Instant.now();
                                 doc.version = 1;
@@ -181,7 +208,7 @@ public class DocumentStorageService {
                                 return doc.persist();
                             }
                         })
-                        .flatMap(ignored -> 
+                        .flatMap(ignored ->
                             // 2. Upsert PipeDocRecord (physical state) sequentially to maintain session safety
                             PipeDocRecord.<PipeDocRecord>findById(nodeId)
                                     .flatMap(existingRecord -> {
@@ -203,13 +230,14 @@ public class DocumentStorageService {
                                         record.driveName = driveName;
                                         record.objectKey = completeObjectKey;
                                         record.pipedocObjectKey = completeObjectKey;
-                                        record.versionId = putResponse.versionId();
-                                        record.etag = putResponse.eTag();
+                                        record.versionId = finalVersionId;
+                                        record.etag = finalEtag != null ? finalEtag : "";
                                         record.sizeBytes = sizeBytes;
                                         record.contentType = contentType;
                                         record.filename = nodeId.toString() + ".pb";
                                         record.checksum = checksum == null ? "" : checksum;
                                         record.acls = acls;
+                                        record.status = pipeDocStatus;
                                         return record.persist();
                                     }))
             ).map(persisted -> {
@@ -219,12 +247,22 @@ public class DocumentStorageService {
                 String sourceMimeType = docToStore.hasSearchMetadata() && !docToStore.getSearchMetadata().getSourceMimeType().isEmpty()
                         ? docToStore.getSearchMetadata().getSourceMimeType() : contentType;
                 eventEmitter.emitCreated(finalDocId, accountId, completeObjectKey, sizeBytes, checksum,
-                        resolvedBucket, putResponse.versionId(), putResponse.eTag(),
+                        resolvedBucket, finalVersionId, finalEtag,
                         resolvedRequestId, connectorId, finalDatasourceId,
                         docToStore.hasOwnership() ? docToStore.getOwnership() : null,
                         docName, completeObjectKey, sourceMimeType);
                 eventEmitter.emitPipeDocUpdate(isUpdate[0] ? "UPDATED" : "CREATED", nodeId.toString(), finalDocId, docToStore.hasSearchMetadata() ? docToStore.getSearchMetadata().getTitle() : null, null, docToStore.getOwnership(), DEFAULT_RETENTION_INTENT_DAYS);
-                return new StoredDocument(nodeId.toString(), completeObjectKey, putResponse.versionId(), putResponse.eTag(), sizeBytes, checksum, persisted.createdAt.toEpochMilli());
+
+                // In redis-buffered mode, emit a cache flush event for the background storage writer
+                if (useRedis) {
+                    try {
+                        eventEmitter.emitCacheFlushEvent(nodeId.toString(), completeObjectKey, driveName, accountId);
+                    } catch (Exception e) {
+                        LOG.warnf(e, "Failed to emit cache flush event for nodeId=%s — document in Redis but flush may be delayed", nodeId);
+                    }
+                }
+
+                return new StoredDocument(nodeId.toString(), completeObjectKey, finalVersionId, finalEtag, sizeBytes, checksum, persisted.createdAt.toEpochMilli());
             });
         });
     }
@@ -234,11 +272,46 @@ public class DocumentStorageService {
         if (nodeId == null || nodeId.isBlank()) return Uni.createFrom().nullItem();
         UUID uuid;
         try { uuid = UUID.fromString(nodeId); } catch (IllegalArgumentException e) { return Uni.createFrom().nullItem(); }
+
+        // Try Redis first (if redis-buffered mode), fall back to S3
+        boolean useRedis = redisStorageConfig.resolvedStorageMode() == StorageMode.REDIS_BUFFERED;
+
+        if (useRedis) {
+            return redisCache.get(nodeId)
+                    .onFailure().recoverWithNull()  // Redis down = cache miss, not failure
+                    .flatMap(redisBytes -> {
+                        if (redisBytes != null) {
+                            try {
+                                return Uni.createFrom().item(PipeDoc.parseFrom(redisBytes));
+                            } catch (Exception e) {
+                                LOG.warnf("Failed to parse PipeDoc from Redis for nodeId=%s, falling through to S3", nodeId);
+                            }
+                        }
+                        // Cache miss or parse error — fall through to S3
+                        return getFromS3(uuid, requestContext);
+                    });
+        }
+
+        return getFromS3(uuid, requestContext);
+    }
+
+    private Uni<PipeDoc> getFromS3(UUID uuid, Context requestContext) {
         return PipeDocRecord.<PipeDocRecord>findById(uuid).flatMap(record -> {
             if (record == null) return Uni.createFrom().nullItem();
-            return driveService.resolveDrive(record.driveName, record.accountId).flatMap(resolvedDrive -> Uni.createFrom().completionStage(s3AsyncClient.getObject(GetObjectRequest.builder().bucket(resolvedDrive.bucket()).key(record.pipedocObjectKey).build(), AsyncResponseTransformer.toBytes())))
-                    .emitOn(runnable -> { if (requestContext != null) requestContext.runOnContext(v -> runnable.run()); else vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run()); })
-                    .map(response -> { try { return PipeDoc.parseFrom(response.asByteArray()); } catch (Exception e) { return null; } }).onFailure(NoSuchKeyException.class).recoverWithItem((PipeDoc) null);
+            return driveService.resolveDrive(record.driveName, record.accountId)
+                    .flatMap(resolvedDrive -> Uni.createFrom().completionStage(
+                            s3AsyncClient.getObject(
+                                    GetObjectRequest.builder().bucket(resolvedDrive.bucket()).key(record.pipedocObjectKey).build(),
+                                    AsyncResponseTransformer.toBytes())))
+                    .emitOn(runnable -> {
+                        if (requestContext != null) requestContext.runOnContext(v -> runnable.run());
+                        else vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
+                    })
+                    .map(response -> {
+                        try { return PipeDoc.parseFrom(response.asByteArray()); }
+                        catch (Exception e) { return null; }
+                    })
+                    .onFailure(NoSuchKeyException.class).recoverWithItem((PipeDoc) null);
         });
     }
 
@@ -349,12 +422,25 @@ public class DocumentStorageService {
         Context requestContext = Vertx.currentContext().getDelegate();
         if (docId == null || docId.isBlank() || graphAddressId == null || graphAddressId.isBlank() || accountId == null || accountId.isBlank()) return Uni.createFrom().nullItem();
         UUID nodeId = uuidGenerator.generateNodeId(docId, graphAddressId, accountId);
-        return PipeDocRecord.<PipeDocRecord>findById(nodeId).flatMap(record -> {
-            if (record == null) return Uni.createFrom().nullItem();
-            return driveService.resolveDrive(record.driveName, record.accountId).flatMap(resolvedDrive -> Uni.createFrom().completionStage(s3AsyncClient.getObject(GetObjectRequest.builder().bucket(resolvedDrive.bucket()).key(record.pipedocObjectKey).build(), AsyncResponseTransformer.toBytes())))
-                    .emitOn(runnable -> { if (requestContext != null) requestContext.runOnContext(v -> runnable.run()); else vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run()); })
-                    .map(response -> { try { return PipeDoc.parseFrom(response.asByteArray()); } catch (Exception e) { return null; } }).onFailure(NoSuchKeyException.class).recoverWithItem((PipeDoc) null);
-        });
+        String nodeIdStr = nodeId.toString();
+
+        // Try Redis first (if redis-buffered mode), fall back to S3
+        boolean useRedis = redisStorageConfig.resolvedStorageMode() == StorageMode.REDIS_BUFFERED;
+        if (useRedis) {
+            return redisCache.get(nodeIdStr)
+                    .onFailure().recoverWithNull()
+                    .flatMap(redisBytes -> {
+                        if (redisBytes != null) {
+                            try {
+                                return Uni.createFrom().item(PipeDoc.parseFrom(redisBytes));
+                            } catch (Exception e) {
+                                LOG.warnf("Failed to parse PipeDoc from Redis for nodeId=%s, falling through to S3", nodeIdStr);
+                            }
+                        }
+                        return getFromS3(nodeId, requestContext);
+                    });
+        }
+        return getFromS3(nodeId, requestContext);
     }
 
     private String buildObjectKeyBase(String keyPrefix, String driveName, String accountId, String connectorId, String datasourceId, String docId, String clusterId) {

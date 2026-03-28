@@ -87,6 +87,9 @@ dependencies {
     implementation libs.commons.lang3
     implementation libs.httpclient5
 
+    // Redis for optional hot cache layer (document buffer with async S3 flush)
+    implementation 'io.quarkus:quarkus-redis-client'
+
     // Caching (Guava for in-memory cache with eviction)
     implementation 'com.google.guava:guava:33.5.0-jre'
 
