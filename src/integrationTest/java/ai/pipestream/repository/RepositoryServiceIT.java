@@ -220,7 +220,6 @@ public class RepositoryServiceIT {
     // =====================================================================
 
     @Test
-    @Disabled("Pre-existing Vertx context loss in deleteLogicalDocument — tracked separately")
     void deletePipeDoc_afterSave_removesDocument() {
         String docId = UUID.randomUUID().toString();
         SavePipeDocResponse saveResp = savePipeDoc(docId, VALID_ACCOUNT, DATASOURCE, CONNECTOR);

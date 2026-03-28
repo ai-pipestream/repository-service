@@ -88,12 +88,20 @@ public class DocumentStorageService {
     public Uni<StoredDocument> store(PipeDoc document, String requestId, String graphLocationId, String clusterId, String driveName) {
         if (document == null) return Uni.createFrom().failure(new IllegalArgumentException("document must not be null"));
         if (!document.hasOwnership()) return Uni.createFrom().failure(new IllegalArgumentException("document must have ownership context"));
-        
+
         OwnershipContext ownership = document.getOwnership();
         String accountId = ownership.getAccountId();
         if (accountId == null || accountId.isBlank()) return Uni.createFrom().failure(new IllegalArgumentException("ownership.account_id is required"));
 
+        // Capture Vertx context — account validation gRPC callback may complete
+        // on a non-Vertx thread, and downstream Panache calls require it.
+        io.vertx.core.Context callerContext = io.vertx.core.Vertx.currentContext();
+
         return accountCacheService.isValidAccount(accountId)
+                .emitOn(runnable -> {
+                    if (callerContext != null) callerContext.runOnContext(v -> runnable.run());
+                    else vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
+                })
                 .flatMap(isValid -> {
                     if (!isValid) return Uni.createFrom().failure(new AccountValidationException("Account not found or inactive: " + accountId));
 
@@ -323,7 +331,15 @@ public class DocumentStorageService {
         if (docId == null || docId.isBlank() || accountId == null || accountId.isBlank() || datasourceId == null || datasourceId.isBlank()) {
             return Uni.createFrom().failure(new IllegalArgumentException("doc_id, account_id, and datasource_id are required"));
         }
+        // Capture Vertx context — account validation gRPC callback may complete
+        // on a non-Vertx thread, and Panache.withTransaction() requires it.
+        io.vertx.core.Context callerContext = io.vertx.core.Vertx.currentContext();
+
         return accountCacheService.isValidAccount(accountId)
+                .emitOn(runnable -> {
+                    if (callerContext != null) callerContext.runOnContext(v -> runnable.run());
+                    else vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
+                })
                 .flatMap(ok -> {
                     if (!ok) {
                         return Uni.createFrom().failure(new AccountValidationException("Account not found or inactive: " + accountId));
@@ -363,6 +379,11 @@ public class DocumentStorageService {
         if (txn.snapshots.isEmpty() && !txn.removedCatalogOnly) {
             return Uni.createFrom().item(new LogicalDeleteResult(0, List.of(), false));
         }
+        // Capture Vertx context — S3 delete callbacks land on AWS Netty threads,
+        // and we must return to Vertx context before the @WithSession interceptor
+        // attempts to close the session.
+        io.vertx.core.Context callerCtx = io.vertx.core.Vertx.currentContext();
+
         Uni<Void> purge = Uni.createFrom().voidItem();
         if (purgeStorage) {
             for (DeletedPipeDocSnapshot s : txn.snapshots) {
@@ -371,7 +392,12 @@ public class DocumentStorageService {
         }
         List<UUID> nodeIds = txn.snapshots.stream().map(s -> s.nodeId).toList();
         int removedCount = txn.snapshots.size();
-        return purge.invoke(() -> {
+        return purge
+                .emitOn(runnable -> {
+                    if (callerCtx != null) callerCtx.runOnContext(v -> runnable.run());
+                    else vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
+                })
+                .invoke(() -> {
                     for (DeletedPipeDocSnapshot s : txn.snapshots) {
                         OwnershipContext own = OwnershipContext.newBuilder()
                                 .setAccountId(s.accountId)
@@ -387,16 +413,15 @@ public class DocumentStorageService {
     }
 
     private Uni<Void> deleteStorageObjects(DeletedPipeDocSnapshot s) {
-        return driveService.resolveDrive(s.driveName, s.accountId)
-                .flatMap(resolved -> {
-                    String bucket = resolved.bucket();
-                    Uni<Void> u = deleteIfPresent(bucket, s.pipedocObjectKey);
-                    if (s.objectKey != null && !s.objectKey.isBlank() && !s.objectKey.equals(s.pipedocObjectKey)) {
-                        u = u.chain(() -> deleteIfPresent(bucket, s.objectKey));
-                    }
-                    return u;
-                })
-                .onFailure().invoke(e -> LOG.warnf(e, "Storage delete failed for node_id=%s", s.nodeId));
+        // Use cache-only drive resolution to avoid needing a Panache session —
+        // this runs after the transaction closes, so no reactive session is available.
+        String bucket = driveService.resolveBucketFromCache(s.driveName, s3Config.bucket());
+
+        Uni<Void> u = deleteIfPresent(bucket, s.pipedocObjectKey);
+        if (s.objectKey != null && !s.objectKey.isBlank() && !s.objectKey.equals(s.pipedocObjectKey)) {
+            u = u.chain(() -> deleteIfPresent(bucket, s.objectKey));
+        }
+        return u.onFailure().invoke(e -> LOG.warnf(e, "Storage delete failed for node_id=%s", s.nodeId));
     }
 
     private Uni<Void> deleteIfPresent(String bucket, String key) {
