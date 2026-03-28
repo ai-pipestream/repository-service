@@ -13,6 +13,8 @@ import software.amazon.awssdk.core.async.AsyncRequestBody;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
+import io.vertx.core.Context;
+
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -45,6 +47,7 @@ public class BackgroundS3Flusher {
     @Inject S3AsyncClient s3AsyncClient;
     @Inject RedisDocumentCache redisCache;
     @Inject DriveService driveService;
+    @Inject io.vertx.mutiny.core.Vertx vertx;
 
     private final AtomicLong totalFlushed = new AtomicLong(0);
     private final AtomicLong totalLost = new AtomicLong(0);
@@ -90,6 +93,10 @@ public class BackgroundS3Flusher {
     }
 
     private Uni<Void> flushToStorage(UUID nodeId, CacheFlushEvent event, byte[] bytes) {
+        // Capture current Vertx context — S3 async callback lands on AWS Netty thread,
+        // so we must emitOn back to a Vertx context before touching Panache.
+        Context callerContext = io.vertx.core.Vertx.currentContext();
+
         return driveService.resolveDrive(event.getDriveName(), event.getAccountId())
                 .flatMap(resolvedDrive ->
                         Uni.createFrom().completionStage(
@@ -103,6 +110,10 @@ public class BackgroundS3Flusher {
                                         AsyncRequestBody.fromBytes(bytes))
                         )
                 )
+                .emitOn(runnable -> {
+                    if (callerContext != null) callerContext.runOnContext(v -> runnable.run());
+                    else vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
+                })
                 .flatMap(putResp -> {
                     totalFlushed.incrementAndGet();
                     LOG.debugf("Flusher: flushed node_id=%s to storage (%d bytes, etag=%s)",
