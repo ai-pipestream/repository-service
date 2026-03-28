@@ -300,3 +300,5 @@ quarkus.log
 .pipeline/
 .idea
 bin
+
+.claude
