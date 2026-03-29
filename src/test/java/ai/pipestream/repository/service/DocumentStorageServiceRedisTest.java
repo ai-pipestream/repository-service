@@ -157,34 +157,25 @@ public class DocumentStorageServiceRedisTest {
 
     @Test
     @RunOnVertxContext
-    void redisCachePopulated_thenGet_returnsFromRedis(UniAsserter asserter) {
-        String docId = "redis-manual-" + System.currentTimeMillis();
-        PipeDoc doc = buildTestDoc(docId);
-        byte[] pipeDocBytes = doc.toByteArray();
+    void redisCache_inS3OnlyMode_isNoOp(UniAsserter asserter) {
         String nodeId = UUID.randomUUID().toString();
+        byte[] payload = "test-bytes".getBytes();
 
-        // Put bytes directly in Redis
-        asserter.execute(() -> redisCache.put(nodeId, pipeDocBytes));
-
-        // Verify we can read them back from Redis
+        // In s3-only mode, put is a no-op and get returns null
+        asserter.execute(() -> redisCache.put(nodeId, payload));
         asserter.assertThat(
                 () -> redisCache.get(nodeId),
-                bytes -> {
-                    assertThat(bytes)
-                            .as("Redis should return the cached PipeDoc bytes")
-                            .isNotNull()
-                            .hasSize(pipeDocBytes.length);
-
-                    try {
-                        PipeDoc parsed = PipeDoc.parseFrom(bytes);
-                        assertThat(parsed.getDocId())
-                                .as("Parsed PipeDoc from Redis should have correct docId")
-                                .isEqualTo(docId);
-                    } catch (Exception e) {
-                        throw new AssertionError("Failed to parse PipeDoc from Redis bytes", e);
-                    }
-                }
+                bytes -> assertThat(bytes)
+                        .as("Redis cache should be a no-op in s3-only mode (returns null)")
+                        .isNull()
         );
+    }
+
+    @Test
+    void redisCache_inS3OnlyMode_isDisabled() {
+        assertThat(redisCache.isEnabled())
+                .as("Redis cache should report disabled in s3-only mode")
+                .isFalse();
     }
 
     @Test

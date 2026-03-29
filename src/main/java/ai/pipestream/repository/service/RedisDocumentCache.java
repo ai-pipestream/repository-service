@@ -18,6 +18,10 @@ import java.time.Duration;
  * <p>
  * Values are raw protobuf bytes — no serialization overhead beyond what
  * PipeDoc.toByteArray() already does.
+ * <p>
+ * When {@code repo.cache.storage-mode=s3-only} (the default), this bean is
+ * a no-op: all operations return immediately without touching Redis.
+ * This allows the application to start and run without a Redis connection.
  */
 @ApplicationScoped
 public class RedisDocumentCache {
@@ -32,12 +36,18 @@ public class RedisDocumentCache {
     RedisStorageConfig config;
 
     private ReactiveValueCommands<String, byte[]> commands;
+    private boolean enabled;
 
     @PostConstruct
     void init() {
-        commands = redis.value(byte[].class);
-        LOG.infof("RedisDocumentCache initialized (ttl=%dh, refreshOnRead=%s)",
-                config.redis().ttlHours(), config.redis().refreshTtlOnRead());
+        enabled = config.resolvedStorageMode() == StorageMode.REDIS_BUFFERED;
+        if (enabled) {
+            commands = redis.value(byte[].class);
+            LOG.infof("RedisDocumentCache initialized (ttl=%dh, refreshOnRead=%s)",
+                    config.redis().ttlHours(), config.redis().refreshTtlOnRead());
+        } else {
+            LOG.info("RedisDocumentCache disabled (storage-mode=s3-only)");
+        }
     }
 
     /**
@@ -48,6 +58,7 @@ public class RedisDocumentCache {
      * @return Uni completing when the write is acknowledged
      */
     public Uni<Void> put(String nodeId, byte[] pipeDocBytes) {
+        if (!enabled) return Uni.createFrom().voidItem();
         String key = KEY_PREFIX + nodeId;
         Duration ttl = Duration.ofHours(config.redis().ttlHours());
         return commands.setex(key, ttl.toSeconds(), pipeDocBytes)
@@ -63,6 +74,7 @@ public class RedisDocumentCache {
      * @return the protobuf bytes, or null on cache miss
      */
     public Uni<byte[]> get(String nodeId) {
+        if (!enabled) return Uni.createFrom().nullItem();
         String key = KEY_PREFIX + nodeId;
         return commands.get(key)
                 .onItem().ifNotNull().call(bytes -> {
@@ -89,9 +101,17 @@ public class RedisDocumentCache {
      * @return Uni completing when the delete is acknowledged
      */
     public Uni<Void> delete(String nodeId) {
+        if (!enabled) return Uni.createFrom().voidItem();
         String key = KEY_PREFIX + nodeId;
         return redis.key().del(key)
                 .invoke(count -> LOG.debugf("Redis DEL %s (removed=%d)", key, count))
                 .replaceWithVoid();
+    }
+
+    /**
+     * Whether the Redis cache is active (storage-mode=redis-buffered).
+     */
+    public boolean isEnabled() {
+        return enabled;
     }
 }

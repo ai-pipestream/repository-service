@@ -7,6 +7,7 @@ import ai.pipestream.test.support.S3TestResource;
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.hibernate.reactive.panache.TransactionalUniAsserter;
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.junit.TestProfile;
 import io.quarkus.test.vertx.RunOnVertxContext;
 import io.smallrye.reactive.messaging.kafka.Record;
 import jakarta.inject.Inject;
@@ -28,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * - Invalid/null events are handled gracefully
  */
 @QuarkusTest
+@TestProfile(RedisBufferedTestProfile.class)
 @QuarkusTestResource(S3TestResource.class)
 public class BackgroundS3FlusherTest {
 

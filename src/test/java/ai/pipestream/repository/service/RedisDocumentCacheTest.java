@@ -1,6 +1,7 @@
 package ai.pipestream.repository.service;
 
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.junit.TestProfile;
 import io.quarkus.test.vertx.RunOnVertxContext;
 import io.quarkus.test.vertx.UniAsserter;
 import jakarta.inject.Inject;
@@ -17,6 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Uses Quarkus DevServices to auto-provision a Redis container.
  */
 @QuarkusTest
+@TestProfile(RedisBufferedTestProfile.class)
 public class RedisDocumentCacheTest {
 
     private static final Logger LOG = Logger.getLogger(RedisDocumentCacheTest.class);
