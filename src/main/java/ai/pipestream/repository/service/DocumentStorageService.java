@@ -149,12 +149,22 @@ public class DocumentStorageService {
                 docToStore.hasOwnership() ? docToStore.getOwnership() : null);
 
         // Branch on storage mode: S3-only (synchronous) vs Redis-buffered (async S3 flush)
-        boolean useRedis = redisStorageConfig.resolvedStorageMode() == StorageMode.REDIS_BUFFERED;
+        // In redis-buffered mode, if Redis is down, fall back to synchronous S3 write.
+        boolean wantRedis = redisStorageConfig.resolvedStorageMode() == StorageMode.REDIS_BUFFERED;
+        final boolean[] usedRedis = {false};
 
         Uni<?> storageWrite;
-        if (useRedis) {
-            // Redis path: sub-ms write, S3 happens later via Kafka consumer
-            storageWrite = redisCache.put(nodeId.toString(), pipeDocBytes);
+        if (wantRedis) {
+            // Try Redis first; on failure, fall back to synchronous S3 write
+            storageWrite = redisCache.put(nodeId.toString(), pipeDocBytes)
+                    .invoke(() -> usedRedis[0] = true)
+                    .onFailure().recoverWithUni(redisFail -> {
+                        LOG.warnf(redisFail, "Redis PUT failed for nodeId=%s, falling back to synchronous S3 write", nodeId);
+                        return Uni.createFrom().completionStage(
+                                s3AsyncClient.putObject(PutObjectRequest.builder().bucket(resolvedBucket).key(completeObjectKey)
+                                        .contentType(contentType).contentLength(sizeBytes).build(), AsyncRequestBody.fromBytes(pipeDocBytes))
+                        ).replaceWithVoid();
+                    });
         } else {
             // S3 path: synchronous write, wait for ACK
             storageWrite = Uni.createFrom().completionStage(
@@ -168,16 +178,16 @@ public class DocumentStorageService {
             else vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
         })
         .flatMap(writeResult -> {
-            // Extract S3 metadata (only available in S3-only mode)
+            // Extract S3 metadata (only available when S3 was written directly)
             String s3VersionId = null;
             String s3Etag = null;
-            if (!useRedis && writeResult instanceof software.amazon.awssdk.services.s3.model.PutObjectResponse putResponse) {
+            if (!usedRedis[0] && writeResult instanceof software.amazon.awssdk.services.s3.model.PutObjectResponse putResponse) {
                 s3VersionId = putResponse.versionId();
                 s3Etag = putResponse.eTag();
             }
             final String finalVersionId = s3VersionId;
             final String finalEtag = s3Etag;
-            final String pipeDocStatus = useRedis ? BackgroundS3Flusher.STATUS_PENDING_STORAGE : BackgroundS3Flusher.STATUS_AVAILABLE;
+            final String pipeDocStatus = usedRedis[0] ? BackgroundS3Flusher.STATUS_PENDING_STORAGE : BackgroundS3Flusher.STATUS_AVAILABLE;
 
             final boolean[] isUpdate = {false};
             return Panache.<PipeDocRecord>withTransaction(() ->
@@ -192,7 +202,7 @@ public class DocumentStorageService {
                             doc.contentType = contentType;
                             doc.contentSize = sizeBytes;
                             doc.checksum = checksum;
-                            doc.storageLocation = useRedis
+                            doc.storageLocation = usedRedis[0]
                                     ? "redis://pipedoc:" + nodeId  // temporary — S3 path set after flush
                                     : "s3://" + resolvedBucket + "/" + completeObjectKey;
                             doc.updatedAt = Instant.now();
@@ -262,7 +272,7 @@ public class DocumentStorageService {
                 eventEmitter.emitPipeDocUpdate(isUpdate[0] ? "UPDATED" : "CREATED", nodeId.toString(), finalDocId, docToStore.hasSearchMetadata() ? docToStore.getSearchMetadata().getTitle() : null, null, docToStore.getOwnership(), DEFAULT_RETENTION_INTENT_DAYS);
 
                 // In redis-buffered mode, emit a cache flush event for the background storage writer
-                if (useRedis) {
+                if (usedRedis[0]) {
                     try {
                         eventEmitter.emitCacheFlushEvent(nodeId.toString(), completeObjectKey, driveName, accountId);
                     } catch (Exception e) {
