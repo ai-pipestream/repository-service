@@ -87,6 +87,9 @@ dependencies {
     implementation libs.commons.lang3
     implementation libs.httpclient5
 
+    // Redis for optional hot cache layer (document buffer with async S3 flush)
+    implementation 'io.quarkus:quarkus-redis-client'
+
     // Caching (Guava for in-memory cache with eviction)
     implementation 'com.google.guava:guava:33.5.0-jre'
 
@@ -104,6 +107,7 @@ dependencies {
     testImplementation 'io.quarkus:quarkus-test-vertx'
     testImplementation 'io.quarkus:quarkus-test-hibernate-reactive-panache'
     testImplementation 'io.rest-assured:rest-assured'
+    testImplementation 'org.assertj:assertj-core:3.27.3'
     testImplementation("ai.pipestream:pipestream-test-support:${pipestreamBomVersion}")
     testImplementation 'org.testcontainers:testcontainers-postgresql'
     runtimeOnly libs.quarkus.logging.manager

@@ -9,6 +9,7 @@ import ai.pipestream.repository.filesystem.v1.RepositoryEvent;
 import ai.pipestream.repository.filesystem.v1.SourceContext;
 import ai.pipestream.repository.v1.PipeDocUpdateNotification;
 import ai.pipestream.data.v1.OwnershipContext;
+import ai.pipestream.repository.v1.CacheFlushEvent;
 import com.google.protobuf.Timestamp;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -45,6 +46,10 @@ public class RepositoryEventEmitter {
     @Inject
     @ProtobufChannel("document-uploaded-events-out")
     ProtobufEmitter<DocumentUploadedEvent> documentUploadedEmitter;
+
+    @Inject
+    @ProtobufChannel("cache-flush-out")
+    ProtobufEmitter<CacheFlushEvent> cacheFlushEmitter;
 
     // source_node_id on IntakeRepoEvent is set to datasourceId (the graph entry point),
     // not a service name. The intake consumer uses datasourceId for engine handoff.
@@ -239,6 +244,21 @@ public class RepositoryEventEmitter {
         } catch (Exception e) {
             LOG.warnf(e, "Failed to emit PipeDocUpdateNotification for docId=%s", docId);
         }
+    }
+
+    /**
+     * Emits a cache flush event to Kafka for the background storage flusher.
+     * The flusher reads the document from Redis and persists to durable storage.
+     */
+    public void emitCacheFlushEvent(String nodeId, String objectKey, String driveName, String accountId) {
+        CacheFlushEvent event = CacheFlushEvent.newBuilder()
+                .setNodeId(nodeId)
+                .setObjectKey(objectKey)
+                .setDriveName(driveName)
+                .setAccountId(accountId)
+                .build();
+        cacheFlushEmitter.send(event);
+        LOG.debugf("Emitted cache flush event for node_id=%s", nodeId);
     }
 
     private static String computeEventId(String docId, String operation, Instant timestamp) {

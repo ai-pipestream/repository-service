@@ -98,6 +98,13 @@ public class PipeDocRecord extends PanacheEntityBase {
     @Column(name = "acls")
     public List<String> acls;
 
+    /**
+     * Storage status: AVAILABLE (default, in S3), PENDING_S3 (in Redis, awaiting flush),
+     * LOST (Redis TTL expired before S3 flush).
+     */
+    @Column(name = "status", nullable = false)
+    public String status = "AVAILABLE";
+
     @Column(name = "created_at", nullable = false)
     public Instant createdAt;
 }
