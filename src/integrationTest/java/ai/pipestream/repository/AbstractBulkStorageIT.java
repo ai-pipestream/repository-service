@@ -12,17 +12,13 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URI;
 import java.net.URL;
-import java.nio.file.FileSystem;
-import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -223,50 +219,28 @@ abstract class AbstractBulkStorageIT {
 
     /**
      * Loads .pb files from the parser-pipedoc-parsed jar on the classpath.
-     * Returns byte arrays since the files are inside a jar, not on the filesystem.
+     * Enumerates known filenames (parsed_document_001.pb through parsed_document_200.pb)
+     * since walking a jar filesystem is fragile across different classloader contexts.
      */
-    List<byte[]> loadSampleDocs() throws IOException {
+    List<byte[]> loadSampleDocs() {
         List<byte[]> docs = new ArrayList<>();
-        // Find the jar containing the .pb files
-        Enumeration<URL> resources = getClass().getClassLoader().getResources("parsed_document_001.pb");
-        if (!resources.hasMoreElements()) {
-            LOG.warn("No parsed_document_001.pb found on classpath — parser-pipedoc-parsed jar missing?");
-            return docs;
+        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+
+        for (int i = 1; i <= 200; i++) {
+            String name = String.format("parsed_document_%03d.pb", i);
+            try (InputStream is = cl.getResourceAsStream(name)) {
+                if (is != null) {
+                    docs.add(is.readAllBytes());
+                }
+            } catch (IOException e) {
+                LOG.warnf("Failed to read classpath resource %s: %s", name, e.getMessage());
+            }
         }
 
-        // Walk the jar to find all .pb files
-        URL jarEntry = resources.nextElement();
-        String jarUrl = jarEntry.toString();
-        if (jarUrl.startsWith("jar:")) {
-            String jarPath = jarUrl.substring(4, jarUrl.indexOf("!"));
-            try (FileSystem fs = FileSystems.newFileSystem(URI.create(jarPath), Map.of())) {
-                Path root = fs.getPath("/");
-                try (Stream<Path> walk = Files.walk(root, 1)) {
-                    walk.filter(p -> p.toString().endsWith(".pb"))
-                        .sorted()
-                        .forEach(p -> {
-                            try (InputStream is = Files.newInputStream(p)) {
-                                docs.add(is.readAllBytes());
-                            } catch (IOException e) {
-                                LOG.warnf("Failed to read %s: %s", p, e.getMessage());
-                            }
-                        });
-                }
-            }
+        if (docs.isEmpty()) {
+            LOG.warn("No parsed_document_*.pb files found on classpath — parser-pipedoc-parsed jar missing?");
         } else {
-            // Fallback: files are on filesystem (e.g., exploded classpath in dev mode)
-            Path dir = Path.of(jarEntry.getPath()).getParent();
-            try (Stream<Path> walk = Files.list(dir)) {
-                walk.filter(p -> p.toString().endsWith(".pb"))
-                    .sorted()
-                    .forEach(p -> {
-                        try {
-                            docs.add(Files.readAllBytes(p));
-                        } catch (IOException e) {
-                            LOG.warnf("Failed to read %s: %s", p, e.getMessage());
-                        }
-                    });
-            }
+            LOG.infof("Loaded %d sample PipeDoc files from classpath", docs.size());
         }
         return docs;
     }
