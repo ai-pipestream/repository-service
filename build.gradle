@@ -111,6 +111,9 @@ dependencies {
     testImplementation("ai.pipestream:pipestream-test-support:${pipestreamBomVersion}")
     testImplementation 'org.testcontainers:testcontainers-postgresql'
     runtimeOnly libs.quarkus.logging.manager
+
+    // Pre-parsed PipeDoc protobuf files for bulk storage integration tests
+    integrationTestImplementation libs.pipestream.parser.pipedoc.parsed
 }
 
 configurations.all {

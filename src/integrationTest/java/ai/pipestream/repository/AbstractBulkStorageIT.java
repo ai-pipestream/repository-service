@@ -10,7 +10,11 @@ import org.jboss.logging.Logger;
 import org.junit.jupiter.api.*;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
 import java.net.URL;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -41,8 +45,7 @@ abstract class AbstractBulkStorageIT {
     static final String VALID_ACCOUNT = "valid-account";
     static final String DATASOURCE = "ds-bulk-test";
     static final String CONNECTOR = "conn-bulk-test";
-    static final Path SAMPLE_DOCS_DIR = Path.of(
-            "/work/sample-documents/sample-documents/parser-pipedoc-parsed/src/main/resources");
+    // Sample docs loaded from ai.pipestream:parser-pipedoc-parsed jar on the classpath
     static final Path TIMING_DIR = Path.of(System.getProperty("java.io.tmpdir"), "repo-timing");
 
     @TestHTTPResource
@@ -90,16 +93,17 @@ abstract class AbstractBulkStorageIT {
     @Test
     @Order(1)
     void bulkStore() throws IOException {
-        List<Path> files = listSampleFiles();
-        assertThat(files)
-                .as("Should find sample PipeDoc protobuf files in %s", SAMPLE_DOCS_DIR)
+        List<byte[]> sampleDocs = loadSampleDocs();
+        assertThat(sampleDocs)
+                .as("Should find sample PipeDoc protobuf files on classpath (parser-pipedoc-parsed jar)")
                 .hasSizeGreaterThanOrEqualTo(50);
 
-        LOG.infof("=== [%s] Bulk Store: %d documents ===", modeName(), files.size());
+        LOG.infof("=== [%s] Bulk Store: %d documents ===", modeName(), sampleDocs.size());
         int stored = 0;
 
-        for (Path file : files) {
-            byte[] rawBytes = Files.readAllBytes(file);
+        int fileIdx = 0;
+        for (byte[] rawBytes : sampleDocs) {
+            fileIdx++;
             PipeDoc originalDoc;
             try {
                 originalDoc = PipeDoc.parseFrom(rawBytes);
@@ -107,8 +111,7 @@ abstract class AbstractBulkStorageIT {
                 continue; // skip non-PipeDoc files
             }
 
-            String docId = "bulk-" + modeName() + "-" + file.getFileName().toString().replace(".pb", "")
-                    + "-" + System.nanoTime();
+            String docId = "bulk-" + modeName() + "-" + fileIdx + "-" + System.nanoTime();
             PipeDoc doc = originalDoc.toBuilder()
                     .setDocId(docId)
                     .setOwnership(OwnershipContext.newBuilder()
@@ -140,7 +143,7 @@ abstract class AbstractBulkStorageIT {
                 stats.getMin() / 1e6, stats.getAverage() / 1e6,
                 stats.getMax() / 1e6, stats.getSum() / 1e9);
 
-        assertThat(stored).as("All documents should store successfully").isEqualTo(files.size());
+        assertThat(stored).as("All documents should store successfully").isEqualTo(sampleDocs.size());
     }
 
     @Test
@@ -217,11 +220,54 @@ abstract class AbstractBulkStorageIT {
         LOG.infof("[%s] Timing results written to %s", modeName(), outFile);
     }
 
-    List<Path> listSampleFiles() throws IOException {
-        if (!Files.isDirectory(SAMPLE_DOCS_DIR)) return List.of();
-        try (Stream<Path> walk = Files.list(SAMPLE_DOCS_DIR)) {
-            return walk.filter(p -> p.toString().endsWith(".pb")).sorted().toList();
+    /**
+     * Loads .pb files from the parser-pipedoc-parsed jar on the classpath.
+     * Returns byte arrays since the files are inside a jar, not on the filesystem.
+     */
+    List<byte[]> loadSampleDocs() throws IOException {
+        List<byte[]> docs = new ArrayList<>();
+        // Find the jar containing the .pb files
+        Enumeration<URL> resources = getClass().getClassLoader().getResources("parsed_document_001.pb");
+        if (!resources.hasMoreElements()) {
+            LOG.warn("No parsed_document_001.pb found on classpath — parser-pipedoc-parsed jar missing?");
+            return docs;
         }
+
+        // Walk the jar to find all .pb files
+        URL jarEntry = resources.nextElement();
+        String jarUrl = jarEntry.toString();
+        if (jarUrl.startsWith("jar:")) {
+            String jarPath = jarUrl.substring(4, jarUrl.indexOf("!"));
+            try (FileSystem fs = FileSystems.newFileSystem(URI.create(jarPath), Map.of())) {
+                Path root = fs.getPath("/");
+                try (Stream<Path> walk = Files.walk(root, 1)) {
+                    walk.filter(p -> p.toString().endsWith(".pb"))
+                        .sorted()
+                        .forEach(p -> {
+                            try (InputStream is = Files.newInputStream(p)) {
+                                docs.add(is.readAllBytes());
+                            } catch (IOException e) {
+                                LOG.warnf("Failed to read %s: %s", p, e.getMessage());
+                            }
+                        });
+                }
+            }
+        } else {
+            // Fallback: files are on filesystem (e.g., exploded classpath in dev mode)
+            Path dir = Path.of(jarEntry.getPath()).getParent();
+            try (Stream<Path> walk = Files.list(dir)) {
+                walk.filter(p -> p.toString().endsWith(".pb"))
+                    .sorted()
+                    .forEach(p -> {
+                        try {
+                            docs.add(Files.readAllBytes(p));
+                        } catch (IOException e) {
+                            LOG.warnf("Failed to read %s: %s", p, e.getMessage());
+                        }
+                    });
+            }
+        }
+        return docs;
     }
 
     static String sha256(byte[] data) {
