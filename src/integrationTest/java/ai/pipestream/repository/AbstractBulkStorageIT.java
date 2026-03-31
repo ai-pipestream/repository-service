@@ -8,6 +8,7 @@ import io.grpc.ManagedChannelBuilder;
 import io.quarkus.test.common.http.TestHTTPResource;
 import org.jboss.logging.Logger;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -46,7 +47,8 @@ abstract class AbstractBulkStorageIT {
     static final String DATASOURCE = "ds-bulk-test";
     static final String CONNECTOR = "conn-bulk-test";
     // Sample docs loaded from ai.pipestream:parser-pipedoc-parsed jar on the classpath
-    static final Path TIMING_DIR = Path.of(System.getProperty("java.io.tmpdir"), "repo-timing");
+    @TempDir
+    static Path TIMING_DIR;
 
     @TestHTTPResource
     URL url;
@@ -197,7 +199,6 @@ abstract class AbstractBulkStorageIT {
     void writeTimingResults() throws IOException {
         if (storeTimesNs.isEmpty()) return;
 
-        Files.createDirectories(TIMING_DIR);
         Path outFile = TIMING_DIR.resolve(modeName() + ".properties");
 
         LongSummaryStatistics store = storeTimesNs.stream().mapToLong(Long::longValue).summaryStatistics();
