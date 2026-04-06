@@ -287,6 +287,16 @@ public class RawUploadResource {
                                 resolvedContentType
                             );
 
+                            // This is an actual intake (connector HTTP upload) — emit the intake event
+                            // that triggers the IntakeRepoEventConsumer to hand off to the engine.
+                            // This is the ONLY place IntakeRepoEvent should be emitted.
+                            if (resolvedConnectorId != null && !resolvedConnectorId.isBlank()
+                                    && datasourceId != null && !datasourceId.isBlank()) {
+                                String eventId = resolvedDocId + "-intake-" + System.currentTimeMillis();
+                                eventEmitter.emitIntakeRepoCreated(eventId, java.time.Instant.now(),
+                                        resolvedDocId, accountId, resolvedConnectorId, datasourceId, versionId);
+                            }
+
                             // Emit raw upload event for tracking binary data arrival
                             eventEmitter.emitDocumentUploaded(
                                 resolvedDocId, accountId, blobObjectKey,

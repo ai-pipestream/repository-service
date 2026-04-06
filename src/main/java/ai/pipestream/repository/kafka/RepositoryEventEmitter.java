@@ -144,9 +144,9 @@ public class RepositoryEventEmitter {
         if (ownership != null) eventBuilder.setOwnership(ownership);
 
         emitter.send(eventBuilder.build());
-        if (connectorId != null && !connectorId.isBlank() && datasourceId != null && !datasourceId.isBlank()) {
-            emitIntakeRepoCreated(eventId, now, docId, accountId, connectorId, datasourceId, versionId);
-        }
+        // IntakeRepoEvent is NOT emitted here. It must only be emitted by the actual
+        // intake entry point (RawUploadResource) to prevent infinite loops when the engine
+        // saves intermediate pipeline state via savePipeDoc.
     }
 
     /**
@@ -175,7 +175,7 @@ public class RepositoryEventEmitter {
         }
     }
 
-    private void emitIntakeRepoCreated(String eventId, Instant now, String docId, String accountId, String connectorId, String datasourceId, String versionId) {
+    public void emitIntakeRepoCreated(String eventId, Instant now, String docId, String accountId, String connectorId, String datasourceId, String versionId) {
         IntakeRepoEvent intakeEvent = IntakeRepoEvent.newBuilder().setEventId(eventId + "-intake").setEventType(IntakeRepoEventType.INTAKE_REPO_EVENT_TYPE_CREATED).setEventTime(toProtoTimestamp(now)).setDocId(docId).setAccountId(accountId).setConnectorId(connectorId).setDatasourceId(datasourceId).setSourceNodeId(datasourceId).setS3VersionId(versionId == null ? "" : versionId).build();
         intakeEventEmitter.send(intakeEvent);
     }

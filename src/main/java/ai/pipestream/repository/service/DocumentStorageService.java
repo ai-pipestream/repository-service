@@ -1,6 +1,7 @@
 package ai.pipestream.repository.service;
 
 import ai.pipestream.data.v1.Blob;
+import ai.pipestream.data.v1.BlobBag;
 import ai.pipestream.data.v1.OwnershipContext;
 import ai.pipestream.data.v1.PipeDoc;
 import ai.pipestream.repository.account.AccountCacheService;
@@ -191,43 +192,11 @@ public class DocumentStorageService {
 
             final boolean[] isUpdate = {false};
             return Panache.<PipeDocRecord>withTransaction(() ->
-                // 1. Upsert logical Document identity
-                Document.<Document>find("documentId = ?1 and accountId = ?2 and datasourceId = ?3", finalDocId, accountId, finalDatasourceId).firstResult()
-                        .flatMap(existingDoc -> {
-                            Document doc = existingDoc != null ? existingDoc : new Document();
-                            doc.documentId = finalDocId;
-                            doc.accountId = accountId;
-                            doc.datasourceId = finalDatasourceId;
-                            doc.acls = acls;
-                            doc.contentType = contentType;
-                            doc.contentSize = sizeBytes;
-                            doc.checksum = checksum;
-                            doc.storageLocation = usedRedis[0]
-                                    ? "redis://pipedoc:" + nodeId  // temporary — S3 path set after flush
-                                    : "s3://" + resolvedBucket + "/" + completeObjectKey;
-                            doc.updatedAt = Instant.now();
-                            doc.title = docToStore.hasSearchMetadata() && docToStore.getSearchMetadata().hasTitle() ? docToStore.getSearchMetadata().getTitle() : finalDocId;
-
-                            String filename = null;
-                            if (docToStore.hasBlobBag()) {
-                                if (docToStore.getBlobBag().hasBlob()) filename = docToStore.getBlobBag().getBlob().getFilename();
-                                else if (docToStore.getBlobBag().hasBlobs() && docToStore.getBlobBag().getBlobs().getBlobCount() > 0) filename = docToStore.getBlobBag().getBlobs().getBlob(0).getFilename();
-                            }
-                            doc.filename = (filename != null && !filename.isBlank()) ? filename : doc.title;
-
-                            if (existingDoc == null) {
-                                doc.createdAt = Instant.now();
-                                doc.version = 1;
-                                doc.status = clusterId == null ? "INTAKE" : "PROCESSING";
-                                return doc.persist();
-                            } else {
-                                doc.version++;
-                                if (clusterId != null) doc.status = "PROCESSING";
-                                return doc.persist();
-                            }
-                        })
+                // 1. Upsert logical Document identity (retry on constraint violation for concurrent inserts)
+                upsertDocument(finalDocId, accountId, finalDatasourceId, acls, contentType, sizeBytes,
+                        checksum, usedRedis[0], nodeId, resolvedBucket, completeObjectKey, docToStore, clusterId)
                         .flatMap(ignored ->
-                            // 2. Upsert PipeDocRecord (physical state) sequentially to maintain session safety
+                            // 2. Upsert PipeDocRecord (physical state) via merge to handle concurrent retries
                             PipeDocRecord.<PipeDocRecord>findById(nodeId)
                                     .flatMap(existingRecord -> {
                                         PipeDocRecord record;
@@ -256,7 +225,7 @@ public class DocumentStorageService {
                                         record.checksum = checksum == null ? "" : checksum;
                                         record.acls = acls;
                                         record.status = pipeDocStatus;
-                                        return record.persist();
+                                        return record.getSession().flatMap(session -> session.merge(record));
                                     }))
             ).map(persisted -> {
                 // Full Created event with catalog metadata — confirms upload + persist succeeded
@@ -494,6 +463,99 @@ public class DocumentStorageService {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(digest.digest((accountId + ":" + (connectorId == null ? "" : connectorId)).getBytes(StandardCharsets.UTF_8))).substring(0, 16);
         } catch (NoSuchAlgorithmException e) { throw new RuntimeException(e); }
+    }
+
+    /**
+     * Upsert a Document entity. If concurrent inserts race and one hits a unique constraint
+     * violation, retry by finding the now-existing record and updating it.
+     */
+    private Uni<Document> upsertDocument(String docId, String accountId, String datasourceId,
+            List<String> acls, String contentType, long sizeBytes, String checksum,
+            boolean usedRedis, UUID nodeId, String resolvedBucket, String completeObjectKey,
+            PipeDoc docToStore, String clusterId) {
+
+        return Document.<Document>find("documentId = ?1 and accountId = ?2 and datasourceId = ?3",
+                        docId, accountId, datasourceId).firstResult()
+                .flatMap(existingDoc -> {
+                    Document doc = existingDoc != null ? existingDoc : new Document();
+                    populateDocument(doc, docId, accountId, datasourceId, acls, contentType, sizeBytes,
+                            checksum, usedRedis, nodeId, resolvedBucket, completeObjectKey, docToStore,
+                            clusterId, existingDoc == null);
+
+                    if (existingDoc == null) {
+                        return doc.<Document>persist()
+                                .onFailure(t -> isConstraintViolation(t)).recoverWithUni(t -> {
+                                    LOG.debugf("Document insert race for doc_id=%s, retrying as update", docId);
+                                    return Document.<Document>find("documentId = ?1 and accountId = ?2 and datasourceId = ?3",
+                                                    docId, accountId, datasourceId).firstResult()
+                                            .flatMap(retryDoc -> {
+                                                if (retryDoc == null) {
+                                                    return Uni.createFrom().failure(t);
+                                                }
+                                                populateDocument(retryDoc, docId, accountId, datasourceId, acls,
+                                                        contentType, sizeBytes, checksum, usedRedis, nodeId,
+                                                        resolvedBucket, completeObjectKey, docToStore, clusterId, false);
+                                                return retryDoc.persist();
+                                            });
+                                });
+                    }
+                    return doc.persist();
+                });
+    }
+
+    private void populateDocument(Document doc, String docId, String accountId, String datasourceId,
+            List<String> acls, String contentType, long sizeBytes, String checksum,
+            boolean usedRedis, UUID nodeId, String resolvedBucket, String completeObjectKey,
+            PipeDoc docToStore, String clusterId, boolean isNew) {
+        doc.documentId = docId;
+        doc.accountId = accountId;
+        doc.datasourceId = datasourceId;
+        doc.acls = acls;
+        doc.contentType = contentType;
+        doc.contentSize = sizeBytes;
+        doc.checksum = checksum;
+        doc.storageLocation = usedRedis
+                ? "redis://pipedoc:" + nodeId
+                : "s3://" + resolvedBucket + "/" + completeObjectKey;
+        doc.updatedAt = Instant.now();
+        doc.title = docToStore.hasSearchMetadata() && docToStore.getSearchMetadata().hasTitle()
+                ? docToStore.getSearchMetadata().getTitle() : docId;
+
+        String filename = extractFilename(docToStore);
+        doc.filename = (filename != null && !filename.isBlank()) ? filename : doc.title;
+
+        if (isNew) {
+            doc.createdAt = Instant.now();
+            doc.version = 1;
+            doc.status = clusterId == null ? "INTAKE" : "PROCESSING";
+        } else {
+            doc.version++;
+            if (clusterId != null) doc.status = "PROCESSING";
+        }
+    }
+
+    /**
+     * Extracts the best filename from a PipeDoc's blob bag.
+     * Checks single blob first, then iterates all blobs for the first non-empty filename.
+     */
+    private static String extractFilename(PipeDoc doc) {
+        if (!doc.hasBlobBag()) return null;
+        BlobBag bag = doc.getBlobBag();
+        if (bag.hasBlob() && !bag.getBlob().getFilename().isEmpty()) {
+            return bag.getBlob().getFilename();
+        }
+        if (bag.hasBlobs()) {
+            for (Blob blob : bag.getBlobs().getBlobList()) {
+                if (!blob.getFilename().isEmpty()) return blob.getFilename();
+            }
+        }
+        return null;
+    }
+
+    private boolean isConstraintViolation(Throwable t) {
+        if (t instanceof org.hibernate.exception.ConstraintViolationException) return true;
+        String msg = t.getMessage();
+        return msg != null && (msg.contains("23505") || msg.contains("duplicate key") || msg.contains("unique constraint"));
     }
 
     private static String computeSha256(byte[] data) {
