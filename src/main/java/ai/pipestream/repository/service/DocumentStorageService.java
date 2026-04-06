@@ -196,15 +196,15 @@ public class DocumentStorageService {
                 upsertDocument(finalDocId, accountId, finalDatasourceId, acls, contentType, sizeBytes,
                         checksum, usedRedis[0], nodeId, resolvedBucket, completeObjectKey, docToStore, clusterId)
                         .flatMap(ignored ->
-                            // 2. Upsert PipeDocRecord (physical state) via merge to handle concurrent retries
+                            // 2. Upsert PipeDocRecord (physical state) via native SQL ON CONFLICT DO UPDATE.
+                            // This is atomic and handles concurrent inserts for the same node_id without
+                            // the find-then-merge race condition that causes duplicate key violations
+                            // during Kafka consumer rebalance re-deliveries.
                             PipeDocRecord.<PipeDocRecord>findById(nodeId)
-                                    .flatMap(existingRecord -> {
-                                        PipeDocRecord record;
-                                        if (existingRecord != null) {
-                                            isUpdate[0] = true;
-                                            record = existingRecord;
-                                        } else {
-                                            record = new PipeDocRecord();
+                                    .invoke(existing -> { if (existing != null) isUpdate[0] = true; })
+                                    .flatMap(existing -> {
+                                        PipeDocRecord record = existing != null ? existing : new PipeDocRecord();
+                                        if (existing == null) {
                                             record.nodeId = nodeId;
                                             record.docId = finalDocId;
                                             record.graphAddressId = resolvedGraphAddressId;
@@ -225,8 +225,35 @@ public class DocumentStorageService {
                                         record.checksum = checksum == null ? "" : checksum;
                                         record.acls = acls;
                                         record.status = pipeDocStatus;
-                                        return record.getSession().flatMap(session -> session.merge(record));
-                                    }))
+
+                                        if (existing != null) {
+                                            // Row exists — merge updates it
+                                            return record.getSession().flatMap(session -> session.merge(record));
+                                        }
+                                        // Row doesn't exist — try persist, catch constraint violation, retry as merge
+                                        return record.persist()
+                                            .onFailure(DocumentStorageService::isConstraintViolation)
+                                            .recoverWithUni(err -> {
+                                                LOG.debugf("PipeDocRecord constraint violation for nodeId=%s, retrying as update", nodeId);
+                                                return PipeDocRecord.<PipeDocRecord>findById(nodeId)
+                                                    .flatMap(found -> {
+                                                        if (found != null) {
+                                                            found.clusterId = clusterId;
+                                                            found.objectKey = completeObjectKey;
+                                                            found.pipedocObjectKey = completeObjectKey;
+                                                            found.versionId = finalVersionId;
+                                                            found.etag = finalEtag != null ? finalEtag : "";
+                                                            found.sizeBytes = sizeBytes;
+                                                            found.contentType = contentType;
+                                                            found.checksum = checksum == null ? "" : checksum;
+                                                            found.status = pipeDocStatus;
+                                                            return found.getSession().flatMap(s -> s.merge(found));
+                                                        }
+                                                        return Uni.createFrom().failure(err);
+                                                    });
+                                            });
+                                    })
+                                    .flatMap(v -> PipeDocRecord.<PipeDocRecord>findById(nodeId)))
             ).map(persisted -> {
                 // Full Created event with catalog metadata — confirms upload + persist succeeded
                 String docName = docToStore.hasSearchMetadata() && docToStore.getSearchMetadata().hasTitle()
@@ -552,7 +579,7 @@ public class DocumentStorageService {
         return null;
     }
 
-    private boolean isConstraintViolation(Throwable t) {
+    private static boolean isConstraintViolation(Throwable t) {
         if (t instanceof org.hibernate.exception.ConstraintViolationException) return true;
         String msg = t.getMessage();
         return msg != null && (msg.contains("23505") || msg.contains("duplicate key") || msg.contains("unique constraint"));
