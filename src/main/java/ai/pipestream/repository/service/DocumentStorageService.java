@@ -30,8 +30,10 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -75,18 +77,22 @@ public class DocumentStorageService {
     }
 
     public Uni<StoredDocument> store(PipeDoc document) {
-        return store(document, null, null, null, null);
+        return store(document, null, null, null, null, null);
     }
 
     public Uni<StoredDocument> store(PipeDoc document, String requestId) {
-        return store(document, requestId, null, null, null);
+        return store(document, requestId, null, null, null, null);
     }
 
     public Uni<StoredDocument> store(PipeDoc document, String requestId, String graphLocationId, String clusterId) {
-        return store(document, requestId, graphLocationId, clusterId, null);
+        return store(document, requestId, graphLocationId, clusterId, null, null);
     }
 
     public Uni<StoredDocument> store(PipeDoc document, String requestId, String graphLocationId, String clusterId, String driveName) {
+        return store(document, requestId, graphLocationId, clusterId, driveName, null);
+    }
+
+    public Uni<StoredDocument> store(PipeDoc document, String requestId, String graphLocationId, String clusterId, String driveName, String graphId) {
         if (document == null) return Uni.createFrom().failure(new IllegalArgumentException("document must not be null"));
         if (!document.hasOwnership()) return Uni.createFrom().failure(new IllegalArgumentException("document must have ownership context"));
 
@@ -120,27 +126,30 @@ public class DocumentStorageService {
 
                     return driveService.resolveDrive(driveName, accountId)
                             .flatMap(resolvedDrive -> continueStoring(docToStore, finalDocId, accountId, connectorId, finalDatasourceId,
-                                    resolvedRequestId, finalGraphAddressId, clusterId, resolvedDrive));
+                                    resolvedRequestId, finalGraphAddressId, clusterId, resolvedDrive, graphId));
                 });
     }
 
     private Uni<StoredDocument> continueStoring(PipeDoc docToStore, String finalDocId, String accountId,
             String connectorId, String finalDatasourceId, String resolvedRequestId, String resolvedGraphAddressId,
-            String clusterId, DriveService.ResolvedDrive resolvedDrive) {
+            String clusterId, DriveService.ResolvedDrive resolvedDrive, String graphId) {
         Context requestContext = Vertx.currentContext().getDelegate();
 
         String driveName = resolvedDrive.driveId();
         String resolvedBucket = resolvedDrive.bucket();
         String resolvedKeyPrefix = resolvedDrive.keyPrefix();
-        
+
         byte[] pipeDocBytes = docToStore.toByteArray();
         String contentType = "application/x-protobuf";
         long sizeBytes = pipeDocBytes.length;
         String checksum = computeSha256(pipeDocBytes);
 
         UUID nodeId = uuidGenerator.generateNodeId(finalDocId, resolvedGraphAddressId, accountId);
-        String basePath = buildObjectKeyBase(resolvedKeyPrefix, driveName, accountId, connectorId, finalDatasourceId, finalDocId, clusterId);
+        String basePath = buildObjectKeyBase(resolvedKeyPrefix, accountId, connectorId, finalDatasourceId, finalDocId, clusterId, graphId);
         String completeObjectKey = basePath + "/" + nodeId.toString() + ".pb";
+
+        // Build S3 metadata for object tagging / observability
+        Map<String, String> s3Metadata = buildS3Metadata(accountId, finalDocId, connectorId, finalDatasourceId, clusterId, graphId);
 
         List<String> acls = new ArrayList<>(docToStore.getOwnership().getAclsList());
 
@@ -163,13 +172,13 @@ public class DocumentStorageService {
                         LOG.warnf(redisFail, "Redis PUT failed for nodeId=%s, falling back to synchronous S3 write", nodeId);
                         return Uni.createFrom().completionStage(
                                 s3AsyncClient.putObject(PutObjectRequest.builder().bucket(resolvedBucket).key(completeObjectKey)
-                                        .contentType(contentType).contentLength(sizeBytes).build(), AsyncRequestBody.fromBytes(pipeDocBytes))
+                                        .contentType(contentType).contentLength(sizeBytes).metadata(s3Metadata).build(), AsyncRequestBody.fromBytes(pipeDocBytes))
                         ).replaceWithVoid();
                     });
         } else {
             // S3 path: synchronous write, wait for ACK
             storageWrite = Uni.createFrom().completionStage(
-                    s3AsyncClient.putObject(PutObjectRequest.builder().bucket(resolvedBucket).key(completeObjectKey).contentType(contentType).contentLength(sizeBytes).build(), AsyncRequestBody.fromBytes(pipeDocBytes))
+                    s3AsyncClient.putObject(PutObjectRequest.builder().bucket(resolvedBucket).key(completeObjectKey).contentType(contentType).contentLength(sizeBytes).metadata(s3Metadata).build(), AsyncRequestBody.fromBytes(pipeDocBytes))
             );
         }
 
@@ -265,12 +274,16 @@ public class DocumentStorageService {
                         resolvedRequestId, connectorId, finalDatasourceId,
                         docToStore.hasOwnership() ? docToStore.getOwnership() : null,
                         docName, completeObjectKey, sourceMimeType);
-                eventEmitter.emitPipeDocUpdate(isUpdate[0] ? "UPDATED" : "CREATED", nodeId.toString(), finalDocId, docToStore.hasSearchMetadata() ? docToStore.getSearchMetadata().getTitle() : null, null, docToStore.getOwnership(), DEFAULT_RETENTION_INTENT_DAYS);
+                String driveType = (graphId != null && !graphId.isBlank()) ? "pipeline" : (clusterId != null && !clusterId.isBlank()) ? "pipeline" : "intake";
+                eventEmitter.emitPipeDocUpdate(isUpdate[0] ? "UPDATED" : "CREATED", nodeId.toString(), finalDocId,
+                        docToStore.hasSearchMetadata() ? docToStore.getSearchMetadata().getTitle() : null, null,
+                        docToStore.getOwnership(), DEFAULT_RETENTION_INTENT_DAYS, driveType, graphId, clusterId);
 
                 // In redis-buffered mode, emit a cache flush event for the background storage writer
                 if (usedRedis[0]) {
                     try {
-                        eventEmitter.emitCacheFlushEvent(nodeId.toString(), completeObjectKey, driveName, accountId);
+                        eventEmitter.emitCacheFlushEvent(nodeId.toString(), completeObjectKey, driveName, accountId,
+                                finalDocId, connectorId, finalDatasourceId, clusterId, graphId);
                     } catch (Exception e) {
                         LOG.warnf(e, "Failed to emit cache flush event for nodeId=%s — document in Redis but flush may be delayed", nodeId);
                     }
@@ -410,7 +423,7 @@ public class DocumentStorageService {
                                 .setDatasourceId(s.datasourceId)
                                 .setConnectorId(s.connectorId != null ? s.connectorId : "")
                                 .build();
-                        eventEmitter.emitPipeDocUpdate("DELETED", s.nodeId.toString(), docId, null, null, own, DEFAULT_RETENTION_INTENT_DAYS);
+                        eventEmitter.emitPipeDocUpdate("DELETED", s.nodeId.toString(), docId, null, null, own, DEFAULT_RETENTION_INTENT_DAYS, null, null, null);
                     }
                     String connectorId = txn.snapshots.isEmpty() ? null : txn.snapshots.get(0).connectorId;
                     eventEmitter.emitDeleted(docId, accountId, "deleteLogicalDocument", purgeStorage, UUID.randomUUID().toString(), connectorId, datasourceId);
@@ -474,15 +487,59 @@ public class DocumentStorageService {
         return getFromS3(nodeId, requestContext);
     }
 
-    private String buildObjectKeyBase(String keyPrefix, String driveName, String accountId, String connectorId, String datasourceId, String docId, String clusterId) {
-        String basePath = String.join("/", sanitize(keyPrefix), sanitize(driveName), sanitize(accountId), sanitize(connectorId), sanitize(datasourceId), sanitize(docId));
-        return (clusterId == null || clusterId.isBlank()) ? basePath + "/intake" : basePath + "/" + sanitize(clusterId);
+    /**
+     * Builds the S3 object key base path using a dual-drive layout:
+     * <ul>
+     *   <li>Intake (no graphId, no clusterId): {@code {keyPrefix}/{accountId}/intake/{connectorId}/{datasourceId}/{docId}}</li>
+     *   <li>Pipeline (graphId set): {@code {keyPrefix}/{accountId}/pipeline/{graphId}/{docId}}</li>
+     *   <li>Pipeline fallback (no graphId, has clusterId): {@code {keyPrefix}/{accountId}/pipeline/{clusterId}/{docId}}</li>
+     * </ul>
+     */
+    private String buildObjectKeyBase(String keyPrefix, String accountId, String connectorId,
+            String datasourceId, String docId, String clusterId, String graphId) {
+        String prefix = sanitize(keyPrefix);
+        String acct = sanitize(accountId);
+        String doc = sanitize(docId);
+
+        if (graphId != null && !graphId.isBlank()) {
+            // Pipeline path with graphId
+            return String.join("/", prefix, acct, "pipeline", sanitize(graphId), doc);
+        }
+        if (clusterId != null && !clusterId.isBlank()) {
+            // Pipeline fallback — backward compat for saves with clusterId but no graphId
+            return String.join("/", prefix, acct, "pipeline", sanitize(clusterId), doc);
+        }
+        // Intake path — no graphId, no clusterId
+        return String.join("/", prefix, acct, "intake", sanitize(connectorId), sanitize(datasourceId), doc);
     }
 
     private static String sanitize(String value) {
         if (value == null) return "unknown";
         String v = value.trim();
         return v.isEmpty() ? "unknown" : v.replace("/", "_").replace("\\", "_");
+    }
+
+    /**
+     * Builds S3 user-metadata for PutObject requests.
+     * Keys must NOT include the {@code x-amz-meta-} prefix — the AWS SDK adds it automatically.
+     */
+    static Map<String, String> buildS3Metadata(String accountId, String docId, String connectorId,
+            String datasourceId, String clusterId, String graphId) {
+        Map<String, String> meta = new HashMap<>();
+        if (accountId != null && !accountId.isBlank()) meta.put("account-id", accountId);
+        if (docId != null && !docId.isBlank()) meta.put("doc-id", docId);
+        if (connectorId != null && !connectorId.isBlank()) meta.put("connector-id", connectorId);
+        if (datasourceId != null && !datasourceId.isBlank()) meta.put("datasource-id", datasourceId);
+        if (graphId != null && !graphId.isBlank()) {
+            meta.put("graph-id", graphId);
+            meta.put("drive-type", "pipeline");
+        } else if (clusterId != null && !clusterId.isBlank()) {
+            meta.put("cluster-id", clusterId);
+            meta.put("drive-type", "pipeline");
+        } else {
+            meta.put("drive-type", "intake");
+        }
+        return meta;
     }
 
     private static String computeDatasourceId(String accountId, String connectorId) {

@@ -95,12 +95,16 @@ public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServi
         // Extract cluster_id (optional - null for intake, set for cluster processing)
         String clusterId = request.hasClusterId() ? request.getClusterId() : null;
         LOG.debugf("Using cluster_id: %s", clusterId != null ? clusterId : "null (intake)");
-        
+
+        // Extract graph_id (optional - set for pipeline/engine saves, null for intake)
+        String graphId = request.hasGraphId() ? request.getGraphId() : null;
+        LOG.debugf("Using graph_id: %s", graphId != null ? graphId : "null (intake)");
+
         // Pass drive from request so storage resolves correct S3 bucket+prefix
         String driveName = request.getDrive();
 
         // Use DocumentStorageService to store the document
-        return storageService.store(docToSave, null, graphLocationId, clusterId, driveName)
+        return storageService.store(docToSave, null, graphLocationId, clusterId, driveName, graphId)
                 .map(stored -> SavePipeDocResponse.newBuilder()
                         .setNodeId(stored.documentId())
                         .setDrive(request.getDrive())
