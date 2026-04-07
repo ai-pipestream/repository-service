@@ -28,7 +28,7 @@ scmVersion {
 pipestreamProtos {
     sourceMode = 'git-proto-workspace'
     gitRepo = "https://github.com/ai-pipestream/pipestream-protos.git"
-    gitRef = "feature/dual-drive-s3-layout"
+    gitRef = "main"
     generateMutiny = true  // Quarkus uses Mutiny for reactive gRPC
     generateDescriptors = true
 
