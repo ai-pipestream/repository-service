@@ -97,7 +97,11 @@ public class BackgroundS3Flusher {
         // so we must emitOn back to a Vertx context before touching Panache.
         Context callerContext = io.vertx.core.Vertx.currentContext();
 
-        return driveService.resolveDrive(event.getDriveName(), event.getAccountId())
+        // The @Incoming SmallRye handler runs on a Vert.x event loop without a Hibernate session.
+        // Wrap the Panache call in withSession() to provide one.
+        return io.quarkus.hibernate.reactive.panache.Panache.withSession(() ->
+            driveService.resolveDrive(event.getDriveName(), event.getAccountId())
+        )
                 .flatMap(resolvedDrive ->
                         Uni.createFrom().completionStage(
                                 s3AsyncClient.putObject(
