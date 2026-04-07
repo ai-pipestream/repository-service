@@ -223,7 +223,8 @@ public class RepositoryEventEmitter {
     /**
      * Emit a PipeDocUpdateNotification with full ownership context.
      */
-    public void emitPipeDocUpdate(String updateType, String storageId, String docId, String title, String author, OwnershipContext ownership, int retentionIntentDays) {
+    public void emitPipeDocUpdate(String updateType, String storageId, String docId, String title, String author,
+            OwnershipContext ownership, int retentionIntentDays, String driveType, String graphId, String clusterId) {
         Instant now = Instant.now();
         PipeDocUpdateNotification.Builder builder = PipeDocUpdateNotification.newBuilder()
                 .setUpdateType(updateType)
@@ -237,6 +238,9 @@ public class RepositoryEventEmitter {
         if (title != null && !title.isBlank()) builder.setTitle(title);
         if (author != null && !author.isBlank()) builder.setAuthor(author);
         if (ownership != null) builder.setOwnership(ownership);
+        if (driveType != null && !driveType.isBlank()) builder.setDriveType(driveType);
+        if (graphId != null && !graphId.isBlank()) builder.setGraphId(graphId);
+        if (clusterId != null && !clusterId.isBlank()) builder.setClusterId(clusterId);
 
         try {
             pipeDocUpdateEmitter.send(builder.build());
@@ -250,14 +254,19 @@ public class RepositoryEventEmitter {
      * Emits a cache flush event to Kafka for the background storage flusher.
      * The flusher reads the document from Redis and persists to durable storage.
      */
-    public void emitCacheFlushEvent(String nodeId, String objectKey, String driveName, String accountId) {
-        CacheFlushEvent event = CacheFlushEvent.newBuilder()
+    public void emitCacheFlushEvent(String nodeId, String objectKey, String driveName, String accountId,
+            String docId, String connectorId, String datasourceId, String clusterId, String graphId) {
+        CacheFlushEvent.Builder builder = CacheFlushEvent.newBuilder()
                 .setNodeId(nodeId)
                 .setObjectKey(objectKey)
                 .setDriveName(driveName)
-                .setAccountId(accountId)
-                .build();
-        cacheFlushEmitter.send(event);
+                .setAccountId(accountId);
+        if (docId != null && !docId.isBlank()) builder.setDocId(docId);
+        if (connectorId != null && !connectorId.isBlank()) builder.setConnectorId(connectorId);
+        if (datasourceId != null && !datasourceId.isBlank()) builder.setDatasourceId(datasourceId);
+        if (clusterId != null && !clusterId.isBlank()) builder.setClusterId(clusterId);
+        if (graphId != null && !graphId.isBlank()) builder.setGraphId(graphId);
+        cacheFlushEmitter.send(builder.build());
         LOG.debugf("Emitted cache flush event for node_id=%s", nodeId);
     }
 

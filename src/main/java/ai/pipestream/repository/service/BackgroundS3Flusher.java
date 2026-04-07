@@ -15,6 +15,8 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import io.vertx.core.Context;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -102,18 +104,21 @@ public class BackgroundS3Flusher {
         return io.quarkus.hibernate.reactive.panache.Panache.withSession(() ->
             driveService.resolveDrive(event.getDriveName(), event.getAccountId())
         )
-                .flatMap(resolvedDrive ->
-                        Uni.createFrom().completionStage(
+                .flatMap(resolvedDrive -> {
+                        // Build best-effort S3 metadata from the flush event fields
+                        Map<String, String> s3Meta = buildFlusherMetadata(event);
+                        return Uni.createFrom().completionStage(
                                 s3AsyncClient.putObject(
                                         PutObjectRequest.builder()
                                                 .bucket(resolvedDrive.bucket())
                                                 .key(event.getObjectKey())
                                                 .contentType("application/x-protobuf")
                                                 .contentLength((long) bytes.length)
+                                                .metadata(s3Meta)
                                                 .build(),
                                         AsyncRequestBody.fromBytes(bytes))
-                        )
-                )
+                        );
+                })
                 .emitOn(runnable -> {
                     if (callerContext != null) callerContext.runOnContext(v -> runnable.run());
                     else vertx.getDelegate().getOrCreateContext().runOnContext(v -> runnable.run());
@@ -131,6 +136,28 @@ public class BackgroundS3Flusher {
                 PipeDocRecord.<PipeDocRecord>findById(nodeId)
                         .onItem().ifNotNull().invoke(r -> r.status = status)
         ).replaceWithVoid();
+    }
+
+    /**
+     * Builds S3 user-metadata from the CacheFlushEvent.
+     * Uses the explicit fields from the event rather than parsing the object key.
+     */
+    private static Map<String, String> buildFlusherMetadata(CacheFlushEvent event) {
+        Map<String, String> meta = new HashMap<>();
+        if (event.getAccountId() != null && !event.getAccountId().isBlank()) meta.put("account-id", event.getAccountId());
+        if (event.getDocId() != null && !event.getDocId().isBlank()) meta.put("doc-id", event.getDocId());
+        if (event.getConnectorId() != null && !event.getConnectorId().isBlank()) meta.put("connector-id", event.getConnectorId());
+        if (event.getDatasourceId() != null && !event.getDatasourceId().isBlank()) meta.put("datasource-id", event.getDatasourceId());
+        if (event.hasClusterId()) meta.put("cluster-id", event.getClusterId());
+        if (event.hasGraphId()) {
+            meta.put("graph-id", event.getGraphId());
+            meta.put("drive-type", "pipeline");
+        } else if (event.hasClusterId()) {
+            meta.put("drive-type", "pipeline");
+        } else {
+            meta.put("drive-type", "intake");
+        }
+        return meta;
     }
 
     public long getTotalFlushed() {

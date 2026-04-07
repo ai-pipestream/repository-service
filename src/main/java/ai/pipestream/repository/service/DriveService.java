@@ -24,6 +24,8 @@ public class DriveService {
 
     private static final Logger LOG = Logger.getLogger(DriveService.class);
     private static final String DEFAULT_DRIVE_NAME = "default";
+    private static final String INTAKE_DRIVE_SUFFIX = "intake";
+    private static final String PIPELINE_DRIVE_SUFFIX = "pipeline";
 
     @Inject
     S3Config s3Config;
@@ -31,18 +33,54 @@ public class DriveService {
     private final ConcurrentHashMap<String, Drive> driveCache = new ConcurrentHashMap<>();
 
     /**
-     * Get or create the default drive for an account.
-     * The default drive uses the platform S3 bucket with the accountId as prefix.
+     * Get or create both intake and pipeline drives for an account.
+     * <ul>
+     *   <li>{accountId}:intake  — s3Prefix = {accountId}/intake</li>
+     *   <li>{accountId}:pipeline — s3Prefix = {accountId}/pipeline</li>
+     * </ul>
      *
      * @param accountId the account ID
-     * @return Uni containing the default drive
+     * @return Uni containing the <b>intake</b> drive (callers that stored via the old default drive expect this)
      */
-    public Uni<Drive> getOrCreateDefaultDrive(String accountId) {
+    public Uni<Drive> getOrCreateDrives(String accountId) {
         if (accountId == null || accountId.isBlank()) {
             return Uni.createFrom().failure(new IllegalArgumentException("accountId is required"));
         }
 
-        String driveId = accountId + ":" + DEFAULT_DRIVE_NAME;
+        return getOrCreateSingleDrive(accountId, INTAKE_DRIVE_SUFFIX)
+                .flatMap(intakeDrive ->
+                        getOrCreateSingleDrive(accountId, PIPELINE_DRIVE_SUFFIX)
+                                .replaceWith(intakeDrive));
+    }
+
+    /**
+     * Get or create just the pipeline drive for an account.
+     *
+     * @param accountId the account ID
+     * @return Uni containing the pipeline drive
+     */
+    public Uni<Drive> getOrCreatePipelineDrive(String accountId) {
+        if (accountId == null || accountId.isBlank()) {
+            return Uni.createFrom().failure(new IllegalArgumentException("accountId is required"));
+        }
+        return getOrCreateSingleDrive(accountId, PIPELINE_DRIVE_SUFFIX);
+    }
+
+    /**
+     * Backward-compatible alias — creates both drives and returns the intake drive.
+     *
+     * @param accountId the account ID
+     * @return Uni containing the intake drive (formerly "default")
+     */
+    public Uni<Drive> getOrCreateDefaultDrive(String accountId) {
+        return getOrCreateDrives(accountId);
+    }
+
+    /**
+     * Creates or fetches a single drive for the given account and type suffix.
+     */
+    private Uni<Drive> getOrCreateSingleDrive(String accountId, String typeSuffix) {
+        String driveId = accountId + ":" + typeSuffix;
 
         // Check cache first
         Drive cached = driveCache.get(driveId);
@@ -58,20 +96,20 @@ public class DriveService {
                         return Uni.createFrom().item(existing);
                     }
 
-                    // Create default drive
+                    // Create drive
                     Drive drive = new Drive();
                     drive.driveId = driveId;
-                    drive.name = DEFAULT_DRIVE_NAME;
+                    drive.name = typeSuffix;
                     drive.accountId = accountId;
                     drive.s3Bucket = s3Config.bucket();
-                    drive.s3Prefix = accountId;
+                    drive.s3Prefix = accountId + "/" + typeSuffix;
                     drive.createdAt = Instant.now();
                     drive.updatedAt = Instant.now();
 
                     return drive.<Drive>persist().invoke(d -> {
                         driveCache.put(driveId, d);
-                        LOG.infof("Created default drive for account %s: driveId=%s, bucket=%s, prefix=%s",
-                                accountId, driveId, d.s3Bucket, d.s3Prefix);
+                        LOG.infof("Created %s drive for account %s: driveId=%s, bucket=%s, prefix=%s",
+                                typeSuffix, accountId, driveId, d.s3Bucket, d.s3Prefix);
                     });
                 })
         );
