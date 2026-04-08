@@ -102,7 +102,7 @@ public class DriveService {
                     drive.name = typeSuffix;
                     drive.accountId = accountId;
                     drive.s3Bucket = s3Config.bucket();
-                    drive.s3Prefix = accountId + "/" + typeSuffix;
+                    drive.s3Prefix = s3Config.keyPrefix();
                     drive.createdAt = Instant.now();
                     drive.updatedAt = Instant.now();
 
