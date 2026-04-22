@@ -91,7 +91,7 @@ dependencies {
     implementation 'io.quarkus:quarkus-redis-client'
 
     // Caching (Guava for in-memory cache with eviction)
-    implementation 'com.google.guava:guava:33.5.0-jre'
+    implementation 'com.google.guava:guava:33.6.0-jre'
 
     // Micrometer for metrics
     implementation 'io.quarkus:quarkus-micrometer'
