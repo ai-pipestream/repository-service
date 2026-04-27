@@ -16,6 +16,7 @@ import io.quarkus.grpc.GrpcService;
 import io.quarkus.hibernate.reactive.panache.common.WithSession;
 import io.quarkus.hibernate.reactive.panache.common.WithTransaction;
 import io.smallrye.mutiny.Uni;
+import ai.pipestream.server.vertx.RunOnVertxContext;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -28,6 +29,7 @@ import org.jboss.logging.Logger;
  * - GetDocument
  */
 @GrpcService
+@RunOnVertxContext
 public class NodeUploadGrpcService extends MutinyNodeUploadServiceGrpc.NodeUploadServiceImplBase {
 
     private static final Logger LOG = Logger.getLogger(NodeUploadGrpcService.class);
