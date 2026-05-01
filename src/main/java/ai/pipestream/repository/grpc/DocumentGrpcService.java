@@ -8,7 +8,6 @@ import io.grpc.Status;
 import io.quarkus.grpc.GrpcService;
 import io.quarkus.hibernate.reactive.panache.common.WithSession;
 import io.smallrye.mutiny.Uni;
-import ai.pipestream.server.vertx.RunOnVertxContext;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
@@ -22,7 +21,6 @@ import static com.google.protobuf.util.Timestamps.fromMillis;
  * Provides logical document management and audit trail capabilities.
  */
 @GrpcService
-@RunOnVertxContext
 public class DocumentGrpcService extends MutinyDocumentServiceGrpc.DocumentServiceImplBase {
 
     private static final Logger LOG = Logger.getLogger(DocumentGrpcService.class);

@@ -5,6 +5,7 @@ import ai.pipestream.repository.account.v1.Account;
 import ai.pipestream.repository.account.v1.AccountEvent;
 import ai.pipestream.repository.account.v1.GetAccountRequest;
 import ai.pipestream.repository.account.v1.MutinyAccountServiceGrpc;
+import ai.pipestream.server.constants.PipestreamServices;
 import io.quarkus.cache.CacheInvalidate;
 import io.quarkus.cache.CacheInvalidateAll;
 import io.quarkus.cache.CacheResult;
@@ -66,7 +67,13 @@ public class AccountCacheService {
     Uni<Boolean> lookupAccountActive(String accountId) {
         LOG.debugf("Account cache miss, looking up: %s", accountId);
 
-        return grpcClientFactory.getClient("account-manager", MutinyAccountServiceGrpc::newMutinyStub)
+        // No recoverWithItem(false) here — converting transient gRPC failures
+        // (cold channel, Stork resolution lag, brief unavailability) into a
+        // cached `false` poisons the cache for 5 minutes. Per Quarkus cache
+        // docs, a failed Uni does NOT populate @CacheResult; let the failure
+        // propagate so the caller can fail the request and the next attempt
+        // gets a fresh lookup.
+        return grpcClientFactory.getClient(PipestreamServices.ACCOUNT_MANAGER.serviceName(), MutinyAccountServiceGrpc::newMutinyStub)
                 .flatMap(client -> client.getAccount(
                         GetAccountRequest.newBuilder()
                                 .setAccountId(accountId)
@@ -78,10 +85,6 @@ public class AccountCacheService {
                         return active;
                     }
                     LOG.debugf("Account not found: %s", accountId);
-                    return false;
-                })
-                .onFailure().recoverWithItem(error -> {
-                    LOG.warnf("Failed to lookup account %s: %s", accountId, error.getMessage());
                     return false;
                 });
     }
@@ -120,10 +123,24 @@ public class AccountCacheService {
         return invalidateAccount(accountId)
                 .chain(() -> {
                     if (event.getOperationCase() == AccountEvent.OperationCase.CREATED) {
-                        return driveService.getOrCreateDefaultDrive(accountId)
+                        // Warm the cache by triggering a lookup right after
+                        // invalidation. @CacheResult populates the cache with
+                        // a successful Uni, so the first upload after CREATED
+                        // doesn't race a cold gRPC lookup against an
+                        // in-flight Context cancellation. Failures here are
+                        // logged but don't block drive creation — the next
+                        // upload will retry the lookup.
+                        Uni<Void> warmCache = lookupAccountActive(accountId)
+                                .onFailure().invoke(error -> LOG.warnf(
+                                        "Cache warmup failed for new account %s: %s",
+                                        accountId, error.getMessage()))
+                                .onFailure().recoverWithItem(false)
+                                .replaceWithVoid();
+                        Uni<Void> createDrive = driveService.getOrCreateDefaultDrive(accountId)
                                 .invoke(drive -> LOG.infof("Auto-created default drive for account %s: %s", accountId, drive.driveId))
                                 .onFailure().invoke(error -> LOG.warnf("Failed to auto-create default drive for account %s: %s", accountId, error.getMessage()))
                                 .replaceWithVoid();
+                        return Uni.combine().all().unis(warmCache, createDrive).discardItems();
                     }
                     return Uni.createFrom().voidItem();
                 })

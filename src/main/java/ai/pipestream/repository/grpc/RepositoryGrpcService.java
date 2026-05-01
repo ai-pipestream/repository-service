@@ -23,7 +23,6 @@ import ai.pipestream.repository.service.DocumentStorageService.LogicalDeleteResu
 import io.quarkus.grpc.GrpcService;
 import io.quarkus.hibernate.reactive.panache.common.WithSession;
 import io.smallrye.mutiny.Uni;
-import ai.pipestream.server.vertx.RunOnVertxContext;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 import software.amazon.awssdk.core.async.AsyncResponseTransformer;
@@ -44,7 +43,6 @@ import java.util.UUID;
  * Provides remote access to repository operations.
  */
 @GrpcService
-@RunOnVertxContext
 public class RepositoryGrpcService extends MutinyPipeDocServiceGrpc.PipeDocServiceImplBase {
 
     private static final Logger LOG = Logger.getLogger(RepositoryGrpcService.class);

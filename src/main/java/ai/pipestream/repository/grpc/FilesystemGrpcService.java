@@ -16,7 +16,6 @@ import io.quarkus.hibernate.reactive.panache.Panache;
 import io.quarkus.hibernate.reactive.panache.common.WithSession;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
-import ai.pipestream.server.vertx.RunOnVertxContext;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
@@ -41,7 +40,6 @@ import static com.google.protobuf.util.Timestamps.fromMillis;
  * Provides drive CRUD, S3 admin ops, search, reindex, and metadata streaming.
  */
 @GrpcService
-@RunOnVertxContext
 public class FilesystemGrpcService extends MutinyFilesystemServiceGrpc.FilesystemServiceImplBase {
 
     private static final Logger LOG = Logger.getLogger(FilesystemGrpcService.class);
